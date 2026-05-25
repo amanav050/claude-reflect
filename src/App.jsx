@@ -12,13 +12,15 @@ import { matchSentences } from './utils/matchSentences.js'
 function App() {
   const [theme, toggleTheme] = useTheme()
   const {
-    chats,
     activeChatId,
     activeChat,
+    groupedChats,
     createChat,
     selectChat,
     appendMessage,
     attachReflection,
+    deleteChat,
+    clearAllChats,
   } = useChatHistory()
   const { sendMainQuery, getReflection } = useGroqAPI()
 
@@ -127,7 +129,6 @@ function App() {
     localStorage.setItem('claude_reflect_callout_dismissed', 'true')
   }, [])
 
-  const groupedChats = chats
   const showGlow = queryCount > 0 && queryCount <= 3
 
   const lastUserMessage = activeChat?.messages
@@ -148,6 +149,8 @@ function App() {
         activeChatId={activeChatId}
         onSelectChat={selectChat}
         onNewChat={createChat}
+        onDeleteChat={deleteChat}
+        onClearAllChats={clearAllChats}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />

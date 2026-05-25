@@ -1,5 +1,6 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import ClaudeLogo from '../ClaudeLogo.jsx'
+import { groupChatsByDate } from '../../hooks/useChatHistory.js'
 
 function CollapseIcon() {
   return (
@@ -41,6 +42,8 @@ function Sidebar({
   activeChatId,
   onSelectChat,
   onNewChat,
+  onDeleteChat,
+  onClearAllChats,
   isOpen,
   onClose,
   onToggleSidebar,
@@ -53,34 +56,60 @@ function Sidebar({
     return () => window.removeEventListener('keydown', handleEsc)
   }, [isOpen, onClose])
 
-  const { today = [], previous = [] } = chats ?? {}
+  const { today, previous } = useMemo(() => {
+    if (chats && (Array.isArray(chats.today) || Array.isArray(chats.previous))) {
+      return {
+        today: chats.today ?? [],
+        previous: chats.previous ?? [],
+      }
+    }
+    return groupChatsByDate(chats ?? {})
+  }, [chats])
+
+  const hasChats = today.length > 0 || previous.length > 0
 
   const ChatItem = ({ chat }) => {
     const isActive = chat.id === activeChatId
     return (
-      <button
-        type="button"
-        onClick={() => {
-          onSelectChat(chat.id)
-          if (window.innerWidth < 1024) onClose()
-        }}
+      <div
         className={[
-          'w-full text-left px-3 py-2 rounded-lg text-sm truncate transition-colors duration-200',
-          isActive
-            ? 'bg-card text-text-primary'
-            : 'text-text-secondary hover:bg-card',
+          'group flex items-center rounded-lg transition-colors duration-200',
+          isActive ? 'bg-card' : 'hover:bg-card',
         ].join(' ')}
       >
-        <span className="flex items-center gap-2">
-          {isActive && (
-            <span
-              className="w-1.5 h-1.5 rounded-full shrink-0 bg-accent-reflect"
-              aria-hidden="true"
-            />
-          )}
-          <span className="truncate">{chat.title || 'New chat'}</span>
-        </span>
-      </button>
+        <button
+          type="button"
+          onClick={() => {
+            onSelectChat(chat.id)
+            if (window.innerWidth < 1024) onClose()
+          }}
+          className={[
+            'flex-1 min-w-0 text-left px-3 py-2 rounded-lg text-sm truncate transition-colors duration-200',
+            isActive ? 'text-text-primary' : 'text-text-secondary',
+          ].join(' ')}
+        >
+          <span className="flex items-center gap-2">
+            {isActive && (
+              <span
+                className="w-1.5 h-1.5 rounded-full shrink-0 bg-accent-reflect"
+                aria-hidden="true"
+              />
+            )}
+            <span className="truncate">{chat.title || 'New chat'}</span>
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onDeleteChat(chat.id)
+          }}
+          className="shrink-0 w-7 h-7 mr-1 flex items-center justify-center rounded-md text-xs text-text-tertiary opacity-0 group-hover:opacity-100 hover:text-text-secondary transition-all duration-200"
+          aria-label={`Delete ${chat.title || 'chat'}`}
+        >
+          ×
+        </button>
+      </div>
     )
   }
 
@@ -137,12 +166,26 @@ function Sidebar({
             </div>
           </div>
         )}
-        {today.length === 0 && previous.length === 0 && (
+        {!hasChats && (
           <p className="text-xs px-3 py-4 text-center text-text-tertiary">
             No conversations yet
           </p>
         )}
       </div>
+
+      {hasChats && (
+        <button
+          type="button"
+          onClick={() => {
+            if (window.confirm('Clear all conversations?')) {
+              onClearAllChats()
+            }
+          }}
+          className="shrink-0 mt-2 mx-2 px-3 py-2 text-xs text-text-tertiary hover:text-text-secondary transition-colors duration-200 text-left"
+        >
+          Clear all
+        </button>
+      )}
     </div>
   )
 
