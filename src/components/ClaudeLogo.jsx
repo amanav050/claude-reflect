@@ -1,17 +1,36 @@
-function ClaudeLogo({ size = 20, className = '' }) {
+function ClaudeLogo({ size = 20, className = '', style = {} }) {
+  const rays = Array.from({ length: 12 }).map((_, i) => {
+    const angle = (i * 30) * (Math.PI / 180)
+    const innerR = 6
+    const outerR = 46
+    const spread = 7 * (Math.PI / 180)
+
+    const x1 = 50 + innerR * Math.cos(angle - spread)
+    const y1 = 50 + innerR * Math.sin(angle - spread)
+    const x2 = 50 + outerR * Math.cos(angle)
+    const y2 = 50 + outerR * Math.sin(angle)
+    const x3 = 50 + innerR * Math.cos(angle + spread)
+    const y3 = 50 + innerR * Math.sin(angle + spread)
+
+    const cx = 50 + outerR * 0.6 * Math.cos(angle)
+    const cy = 50 + outerR * 0.6 * Math.sin(angle)
+
+    return `M${x1},${y1} Q${cx},${cy} ${x2},${y2} Q${cx},${cy} ${x3},${y3} Z`
+  })
+
   return (
     <svg
       width={size}
       height={size}
-      viewBox="0 0 60 60"
+      viewBox="0 0 100 100"
       fill="none"
       className={className}
-      aria-hidden="true"
+      style={style}
     >
-      <path
-        d="M30 4 C30 4, 33 20, 35 25 C37 27, 40 27, 56 30 C40 33, 37 33, 35 35 C33 40, 30 56, 30 56 C30 56, 27 40, 25 35 C23 33, 20 33, 4 30 C20 27, 23 27, 25 25 C27 20, 30 4, 30 4Z"
-        fill="currentColor"
-      />
+      {rays.map((d, i) => (
+        <path key={i} d={d} fill="currentColor" />
+      ))}
+      <circle cx="50" cy="50" r="8" fill="currentColor" />
     </svg>
   )
 }

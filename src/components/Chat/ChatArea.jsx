@@ -13,9 +13,9 @@ function getLastAssistantMessageId(messages) {
 
 function getGreeting() {
   const hour = new Date().getHours()
-  if (hour < 12) return { line1: 'Morning, champ', line2: 'Let\'s build something great today.' }
+  if (hour < 12) return { line1: 'Morning, champ', line2: "Let's build something great today." }
   if (hour < 17) return { line1: 'Hey there, rockstar', line2: 'What are we tackling today?' }
-  return { line1: 'Evening, legend', line2: 'Let\'s make this count.' }
+  return { line1: 'Evening, legend', line2: "Let's make this count." }
 }
 
 function ChatArea({
@@ -43,7 +43,7 @@ function ChatArea({
     return (
       <div className="flex flex-col flex-1 min-h-0 min-w-0">
         <div className="flex-1 flex flex-col items-center justify-center px-4 animate-fade-in">
-          <ClaudeLogo size={44} className="mb-5 text-sparkle opacity-90" />
+          <ClaudeLogo size={48} style={{ color: 'var(--color-sparkle)' }} className="mb-5" />
           <h1 className="text-3xl font-medium mb-1.5 tracking-tight" style={{ color: 'var(--color-text-primary)' }}>
             {greeting.line1} <span style={{ color: 'var(--color-sparkle)' }}>✦</span>
           </h1>
