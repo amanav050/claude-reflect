@@ -1,0 +1,337 @@
+---
+---
+description: Complete technical architecture for Claude Reflect — system overview, data flow, component hierarchy, state, API contract, and the reflection JSON schema.
+alwaysApply: true
+---
+
+# Claude Reflect — Architecture
+
+This document is the authoritative reference for how every piece of the app connects. Read it before writing or modifying any code. If a request from me contradicts this document, ask before acting.
+
+## 1. System Overview
+
+Claude Reflect is a single-page React application that wraps an AI chat interface with a real-time reasoning-transparency layer. When the user sends a query, the app makes two sequential Groq API calls — one for the main response and one for a structured JSON reflection that analyzes that response. Both render in a Claude-style interface: the main response in the central chat area, and the reflection (reasoning skeleton, uncertainty flags, gap disclosure, critical question gate) in a right-side Reflect panel. A third on-demand Groq call powers the "Help me think through this" follow-up inside the critical question gate. Chat history is held in React state for the session only — no database, no persistence beyond `localStorage` for theme and onboarding state.
+
+## 2. Data Flow
+
+```
+[User types query in InputBar]
+       │
+       ▼
+[ChatArea adds user message to messages[] for current chat]
+       │
+       ▼
+[Frontend POST /api/chat  body: { type: "main", messages: [...current conversation] }]
+       │
+       ▼
+[Vercel Serverless Function api/chat.js]
+       │  routes on body.type → main
+       │  calls Groq /openai/v1/chat/completions
+       │  model: llama-3.3-70b-versatile, temperature: 0.7, max_tokens: 1500
+       ▼
+[Main response text returned to frontend as { response: "..." }]
+       │
+       ▼
+[ChatArea appends assistant message; ThinkingIndicator hides]
+       │
+       ▼  (immediately, in parallel with paint of main response)
+[Frontend POST /api/chat  body: { type: "reflection", query, response }]
+       │
+       ▼
+[Vercel Serverless Function]
+       │  routes on body.type → reflection
+       │  calls Groq with strict JSON-only system prompt
+       │  model: llama-3.3-70b-versatile, temperature: 0.3, max_tokens: 2000
+       ▼
+[Reflection raw text returned as { reflection: "..." }]
+       │
+       ▼
+[parseReflection.js strips markdown fences, JSON.parse inside try/catch,
+ validates shape, returns parsed object or null]
+       │
+       ▼
+[ReflectPanel receives parsed object, renders four components:
+   • ReasoningSkeleton (reasoning_skeleton[])
+   • UncertaintyFlags  (uncertainty_flags[])
+   • GapDisclosure     (gaps[])
+   • CriticalQuestion  (critical_question)
+ ]
+       │
+       ▼
+[matchSentences.js walks sentence_labels[], finds each sentence in the
+ rendered main response, attaches a ConfidenceIndicator dot to each match]
+       │
+       ▼
+[Cross-link wiring: clicking a flagged sentence scrolls Reflect panel
+ to its flag and pulses it; clicking a flag pulses the sentence]
+       │
+       ▼
+[User reads. If they click "Help me think through this" on the critical question:
+   Frontend POST /api/chat  body: { type: "followup", query, response,
+                                    criticalQuestion, briefSummary }
+   → routes on body.type → followup
+   → calls Groq, model: llama-3.3-70b-versatile, temperature: 0.5, max_tokens: 800
+   → response renders inline beneath the question]
+```
+
+**Why two calls, not one streaming call:** the reflection requires the *complete* main response as input. Streaming the main response while computing reflection in the same turn would require post-stream chaining anyway. Doing them as two sequential POSTs from the frontend keeps the serverless function stateless and makes failures isolatable — if reflection fails, the main response is unaffected.
+
+**Why all three calls go through one `/api/chat` endpoint:** keeps Vercel serverless function count at one (free tier friendly), keeps API key handling in a single place, makes adding logging/rate-limiting trivial later.
+
+## 3. Component Hierarchy
+
+```
+App.jsx
+├── Header.jsx
+│     props: { theme, onToggleTheme, sidebarOpen, onToggleSidebar }
+│
+├── Sidebar.jsx
+│     props: { chats, activeChatId, onSelectChat, onNewChat, isOpen, onClose }
+│
+├── ChatArea.jsx
+│     props: { chat, onSendMessage, isLoading }
+│     ├── MessageBubble.jsx (rendered per message in chat.messages[])
+│     │     props: { message, sentenceLabels, onSentenceClick, activeSentenceId }
+│     │     └── ConfidenceIndicator.jsx (one per labeled sentence)
+│     │           props: { label, isActive }
+│     ├── ThinkingIndicator.jsx (rendered while isLoading)
+│     └── InputBar.jsx
+│           props: { onSend, disabled }
+│
+├── ReflectPanel.jsx
+│     props: { reflection, isLoading, activeFlagId, onFlagClick,
+│              originalQuery, mainResponse, showGlow }
+│     ├── ReasoningSkeleton.jsx
+│     │     props: { steps }
+│     ├── UncertaintyFlags.jsx
+│     │     props: { flags, activeFlagId, onFlagClick }
+│     ├── GapDisclosure.jsx
+│     │     props: { gaps }
+│     └── CriticalQuestion.jsx
+│           props: { question, context, originalQuery, mainResponse }
+│           // owns the "Help me think through this" call internally
+│
+└── FirstTimeCallout.jsx
+      props: { onDismiss }
+      // renders only if localStorage flag not set
+```
+
+## 4. State Management (Where Things Live)
+
+**App level (in `App.jsx`):**
+- `chats: { [chatId]: { id, title, messages: [], reflection, sentenceLabels } }` — all session chats keyed by id
+- `activeChatId: string`
+- `theme: "light" | "dark"`
+- `sidebarOpen: boolean`
+- `queryCount: number` (drives the Reflect-panel glow for first 2–3 queries)
+
+**ChatArea level:**
+- `isLoading: boolean` — true while either the main or reflection call is in flight
+- `inputDisabled: boolean` — derived from `isLoading` plus message-queue state
+
+**ReflectPanel level:**
+- `activeFlagId: string | null` — which uncertainty flag is currently highlighted (for cross-link pulse)
+- `activeSentenceId: string | null` — which response sentence is highlighted (set by clicking a flag)
+
+**CriticalQuestion level:**
+- `userAcknowledged: boolean` — set true when "I've considered this" is clicked
+- `followupResponse: string | null` — populated after the third API call returns
+- `followupLoading: boolean`
+
+**Persisted in `localStorage`:**
+- `theme`
+- `claude_reflect_first_visit_dismissed` (boolean flag)
+
+**Not persisted (session only):**
+- `chats`, `activeChatId`, `queryCount`
+
+## 5. Custom Hooks
+
+- **`useGroqAPI()`** — exposes three async functions: `sendMainQuery(messages)`, `getReflection(query, response)`, `getFollowup(query, response, criticalQuestion, briefSummary)`. Each handles fetch, error wrapping, and returns either `{ ok: true, data }` or `{ ok: false, error: "..." }`. No throws — callers branch on `ok`.
+- **`useTheme()`** — returns `[theme, toggleTheme]`. Initializes from `localStorage` → falls back to `prefers-color-scheme`. Toggles the `dark` class on `document.documentElement`. Persists to `localStorage` on change.
+- **`useChatHistory()`** — returns `{ chats, activeChatId, activeChat, createChat, selectChat, appendMessage, attachReflection }`. Owns the chats object and exposes manipulators that update the active chat immutably.
+
+## 6. API Contract: `POST /api/chat`
+
+Single endpoint, three request types discriminated by `body.type`.
+
+### Request: main response
+```json
+{
+  "type": "main",
+  "messages": [
+    { "role": "user", "content": "..." },
+    { "role": "assistant", "content": "..." },
+    { "role": "user", "content": "latest message" }
+  ]
+}
+```
+**Response (200):** `{ "response": "the assistant's reply text" }`
+
+### Request: reflection
+```json
+{
+  "type": "reflection",
+  "query": "the user's most recent message",
+  "response": "the main response we just received"
+}
+```
+**Response (200):** `{ "reflection": "<raw text — may or may not be wrapped in ```json fences>" }`
+
+### Request: followup
+```json
+{
+  "type": "followup",
+  "query": "the user's original query",
+  "response": "the main response",
+  "criticalQuestion": "the question raised in the Reflect panel",
+  "briefSummary": "1-2 line summary the frontend produces from the main response"
+}
+```
+**Response (200):** `{ "followup": "the assistant's reply text" }`
+
+### Error responses (any type)
+- `400` — `{ "error": "Invalid request. Missing required fields." }`
+- `429` — `{ "error": "Rate limit reached. Try again in a moment." }`
+- `500` — `{ "error": "Reflection unavailable. Please retry." }`
+
+### Serverless function internals
+- Reads `process.env.GROQ_API_KEY`. Returns 500 with a generic message if missing.
+- Switches on `body.type` to build the correct Groq request payload.
+- Uses `fetch("https://api.groq.com/openai/v1/chat/completions", ...)` — no SDK.
+- Retry policy: on a Groq `429`, retry up to 2 times with 1s and 2s backoff before returning 429 to the client.
+- Never returns the raw Groq error body to the client — wraps it in our own error shape.
+
+## 7. Reflection JSON Schema (what the reflection call must return)
+
+The reflection system prompt instructs Groq to return JSON only. Schema:
+
+```json
+{
+  "reasoning_skeleton": [
+    {
+      "step": "Description of this reasoning step",
+      "label": "from_input | general_knowledge | inference | assumption",
+      "detail": "Brief explanation of the basis for this step"
+    }
+  ],
+  "uncertainty_flags": [
+    {
+      "sentence": "The exact sentence from the response that is flagged",
+      "reason": "Why confidence is lower on this specific claim",
+      "severity": "low | medium | high"
+    }
+  ],
+  "gaps": [
+    {
+      "topic": "What was not covered",
+      "reason": "Why it was omitted or could not be addressed"
+    }
+  ],
+  "critical_question": {
+    "question": "One specific, sharp question that challenges the user to think before acting",
+    "context": "Why this question matters for the user's specific situation"
+  },
+  "sentence_labels": [
+    {
+      "sentence": "Each sentence from the response",
+      "label": "confident | inference | assumption | uncertain",
+      "basis": "What this claim is based on"
+    }
+  ]
+}
+```
+
+`parseReflection.js` validates: every top-level key exists, arrays are arrays (default to `[]` if missing), `critical_question` is an object (default to `{ question: "", context: "" }` if missing). Missing fields degrade gracefully — they don't fail the parse.
+
+## 8. Sentence Matching (`matchSentences.js`)
+
+Given the main response string and `sentence_labels[]`, produce a list of `{ text, label, id, basis }` segments that the renderer walks to produce the message bubble with inline indicators.
+
+Algorithm:
+1. Split the main response into sentences using a regex that handles `.`, `!`, `?` followed by space + capital letter, while respecting common abbreviations (`Dr.`, `e.g.`, `Mr.`, etc.). A pragmatic regex is fine — perfection isn't required.
+2. Normalize each response sentence and each `sentence_labels[].sentence`: lowercase, strip punctuation, collapse whitespace.
+3. For each response sentence, find the best match in `sentence_labels` using bidirectional substring check on the normalized form. If the response sentence's normalized form is a substring of any label's normalized form (or vice versa), match.
+4. Unmatched response sentences get `label: "confident"` (default — neutral, no dot rendered).
+5. Unmatched `sentence_labels` entries are dropped silently.
+6. Each segment gets a stable `id` like `s-0`, `s-1`, …, used for the cross-link pulse target.
+
+Indicator colors by label:
+- `confident` → green dot (`var(--color-confidence-green)`)
+- `inference` → amber dot (`var(--color-confidence-amber)`)
+- `assumption` → red dot (`var(--color-confidence-red)`)
+- `uncertain` → amber dot, slightly desaturated
+
+Each `uncertainty_flags[].sentence` is also matched to a segment id at parse time so clicking a flag scrolls the message into view and pulses the right sentence.
+
+## 9. Responsive Layout
+
+**Desktop (≥ `lg`, 1024px+):**
+- Three-column flex layout: `Sidebar (220px, collapsible) | ChatArea (~55% remaining) | ReflectPanel (~45% remaining)`
+- When sidebar collapses, ChatArea + ReflectPanel widen to fill space (animated 200ms)
+- Reflect panel has its own internal scroll; ChatArea has its own; they don't affect each other
+
+**Tablet (`md` to `lg`, 768–1023px):**
+- Sidebar becomes overlay drawer
+- ChatArea + ReflectPanel remain side-by-side
+
+**Mobile (< `md`, < 768px):**
+- Sidebar is an overlay drawer with backdrop
+- ReflectPanel becomes a collapsible accordion below the chat (sticky-bottom header with chevron, expands upward when tapped)
+- The accordion state is local to ReflectPanel; collapsing does not destroy content
+
+## 10. File Structure (canonical — do not deviate)
+
+```
+claude-reflect/
+├── public/
+│   └── favicon.ico
+├── src/
+│   ├── components/
+│   │   ├── Layout/
+│   │   │   ├── Header.jsx
+│   │   │   ├── Sidebar.jsx
+│   │   │   └── InputBar.jsx
+│   │   ├── Chat/
+│   │   │   ├── ChatArea.jsx
+│   │   │   ├── MessageBubble.jsx
+│   │   │   ├── ConfidenceIndicator.jsx
+│   │   │   └── ThinkingIndicator.jsx
+│   │   ├── Reflect/
+│   │   │   ├── ReflectPanel.jsx
+│   │   │   ├── ReasoningSkeleton.jsx
+│   │   │   ├── UncertaintyFlags.jsx
+│   │   │   ├── GapDisclosure.jsx
+│   │   │   └── CriticalQuestion.jsx
+│   │   └── Onboarding/
+│   │       └── FirstTimeCallout.jsx
+│   ├── hooks/
+│   │   ├── useGroqAPI.js
+│   │   ├── useTheme.js
+│   │   └── useChatHistory.js
+│   ├── utils/
+│   │   ├── parseReflection.js
+│   │   ├── matchSentences.js
+│   │   └── constants.js
+│   ├── App.jsx
+│   ├── index.css
+│   └── main.jsx
+├── api/
+│   └── chat.js
+├── tailwind.config.js
+├── postcss.config.js
+├── vite.config.js
+├── vercel.json
+├── package.json
+├── .env.local           (gitignored — contains GROQ_API_KEY)
+├── .gitignore
+├── rules.md
+├── architecture.md
+└── context.md
+```
+
+## 11. Build Phases (per master prompt)
+
+This architecture is built incrementally across 11 phases. Phases 1–4 stand up the chat shell. Phases 5–9 build the Reflect layer. Phases 10–11 polish and deploy. Do not skip ahead. Do not refactor across phase boundaries unless explicitly asked.
+alwaysApply: true
+---
