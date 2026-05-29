@@ -1,238 +1,193 @@
-import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 
-const CHATS_STORAGE_KEY = 'claude_reflect_chats'
-const ACTIVE_CHAT_STORAGE_KEY = 'claude_reflect_active_chat'
+const STORAGE_KEY = 'claude_reflect_chats'
+const ACTIVE_KEY = 'claude_reflect_active_chat'
+const MAX_CHATS = 20
+
+function generateId() {
+  return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2)
+}
+
+function safeGetStorage(key) {
+  try {
+    const raw = localStorage.getItem(key)
+    if (!raw) return null
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+function safeSetStorage(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    /* localStorage full or unavailable — silently fail */
+  }
+}
 
 function createEmptyChat() {
-  const id = crypto.randomUUID()
   return {
-    id,
+    id: generateId(),
     title: 'New chat',
     messages: [],
     reflection: null,
     sentenceLabels: [],
-    createdAt: Date.now(),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
   }
 }
 
-function getStartOfTodayMs() {
-  const start = new Date()
-  start.setHours(0, 0, 0, 0)
-  return start.getTime()
-}
-
-export function groupChatsByDate(chats) {
-  const today = []
-  const previous = []
-  const todayMs = getStartOfTodayMs()
-
-  const sorted = Object.values(chats).sort((a, b) => b.createdAt - a.createdAt)
-
-  for (const chat of sorted) {
-    if (chat.createdAt >= todayMs) {
-      today.push(chat)
-    } else {
-      previous.push(chat)
-    }
+function loadInitialChats() {
+  const stored = safeGetStorage(STORAGE_KEY)
+  if (stored && typeof stored === 'object' && Object.keys(stored).length > 0) {
+    return stored
   }
-
-  return { today, previous }
+  const chat = createEmptyChat()
+  return { [chat.id]: chat }
 }
 
-function truncateTitle(text, max = 30) {
-  const trimmed = text.trim()
-  if (trimmed.length <= max) return trimmed
-  return `${trimmed.slice(0, max)}…`
-}
-
-function isValidChatsObject(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const entries = Object.entries(value)
-  if (entries.length === 0) return false
-  return entries.every(
-    ([id, chat]) =>
-      chat &&
-      typeof chat === 'object' &&
-      chat.id === id &&
-      Array.isArray(chat.messages) &&
-      typeof chat.createdAt === 'number'
-  )
-}
-
-function getMostRecentChatId(chats) {
-  const sorted = Object.values(chats).sort((a, b) => b.createdAt - a.createdAt)
-  return sorted[0]?.id ?? null
-}
-
-let cachedInitialState = null
-
-function getPersistedInitialState() {
-  if (cachedInitialState) return cachedInitialState
-
-  try {
-    const raw = localStorage.getItem(CHATS_STORAGE_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      if (isValidChatsObject(parsed)) {
-        const ids = Object.keys(parsed)
-        let activeId = localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY)
-        if (!activeId || !parsed[activeId]) {
-          activeId = getMostRecentChatId(parsed)
-        }
-        cachedInitialState = { chats: parsed, activeChatId: activeId }
-        return cachedInitialState
-      }
-    }
-  } catch {
-    /* fall through to default */
-  }
-
-  const initialChat = createEmptyChat()
-  cachedInitialState = {
-    chats: { [initialChat.id]: initialChat },
-    activeChatId: initialChat.id,
-  }
-  return cachedInitialState
+function loadInitialActiveId(chats) {
+  const stored = safeGetStorage(ACTIVE_KEY)
+  if (stored && chats[stored]) return stored
+  /* Pick the most recently updated chat */
+  const sorted = Object.values(chats).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+  return sorted[0]?.id || null
 }
 
 export function useChatHistory() {
-  const [{ chats, activeChatId }, setChatState] = useState(getPersistedInitialState)
+  const [chats, setChats] = useState(() => {
+    const initial = loadInitialChats()
+    return initial
+  })
 
-  const setChats = useCallback((updater) => {
-    setChatState((prev) => {
-      const nextChats = typeof updater === 'function' ? updater(prev.chats) : updater
-      return { ...prev, chats: nextChats }
-    })
-  }, [])
+  const [activeChatId, setActiveChatId] = useState(() => loadInitialActiveId(loadInitialChats()))
 
-  const setActiveChatId = useCallback((id) => {
-    setChatState((prev) => ({ ...prev, activeChatId: id }))
-  }, [])
-
+  /* Persist chats to localStorage whenever they change */
   useEffect(() => {
-    try {
-      localStorage.setItem(CHATS_STORAGE_KEY, JSON.stringify(chats))
-    } catch {
-      /* storage full or unavailable */
-    }
+    safeSetStorage(STORAGE_KEY, chats)
   }, [chats])
 
+  /* Persist active chat ID */
   useEffect(() => {
-    try {
-      localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, activeChatId)
-    } catch {
-      /* storage full or unavailable */
+    if (activeChatId) {
+      safeSetStorage(ACTIVE_KEY, activeChatId)
     }
   }, [activeChatId])
 
-  const activeChat = chats[activeChatId] ?? null
+  const activeChat = chats[activeChatId] || null
 
-  const groupedChats = useMemo(() => groupChatsByDate(chats), [chats])
+  /* ── Enforce max chat limit ── */
+  const enforceLimit = useCallback((chatsObj) => {
+    const entries = Object.values(chatsObj)
+    if (entries.length <= MAX_CHATS) return chatsObj
 
+    const sorted = entries.sort((a, b) => new Date(a.updatedAt) - new Date(b.updatedAt))
+    const toRemove = sorted.slice(0, entries.length - MAX_CHATS)
+    const cleaned = { ...chatsObj }
+    for (const chat of toRemove) {
+      delete cleaned[chat.id]
+    }
+    return cleaned
+  }, [])
+
+  /* ── Create a new chat ── */
   const createChat = useCallback(() => {
     const chat = createEmptyChat()
-    setChats((prev) => ({ ...prev, [chat.id]: chat }))
+    setChats((prev) => {
+      const updated = { ...prev, [chat.id]: chat }
+      return enforceLimit(updated)
+    })
     setActiveChatId(chat.id)
-    return chat.id
-  }, [setChats, setActiveChatId])
+  }, [enforceLimit])
 
-  const selectChat = useCallback(
-    (id) => {
-      setActiveChatId(id)
-    },
-    [setActiveChatId]
-  )
+  /* ── Select a chat ── */
+  const selectChat = useCallback((id) => {
+    setActiveChatId(id)
+  }, [])
 
-  const appendMessage = useCallback(
-    (role, content) => {
-      setChats((prev) => {
-        const chat = prev[activeChatId]
-        if (!chat) return prev
+  /* ── Append a message to the active chat ── */
+  const appendMessage = useCallback((role, content) => {
+    setChats((prev) => {
+      const chat = prev[activeChatId]
+      if (!chat) return prev
 
-        const message = {
-          id: crypto.randomUUID(),
-          role,
-          content,
-        }
+      const newMessage = {
+        id: generateId(),
+        role,
+        content,
+      }
 
-        const isFirstUserMessage =
-          role === 'user' && chat.messages.filter((m) => m.role === 'user').length === 0
+      const isFirstUserMessage = role === 'user' && chat.messages.length === 0
+      const newTitle = isFirstUserMessage
+        ? content.slice(0, 35) + (content.length > 35 ? '...' : '')
+        : chat.title
 
-        const updatedChat = {
+      return {
+        ...prev,
+        [activeChatId]: {
           ...chat,
-          title: isFirstUserMessage ? truncateTitle(content) : chat.title,
-          messages: [...chat.messages, message],
-        }
+          messages: [...chat.messages, newMessage],
+          title: newTitle,
+          updatedAt: new Date().toISOString(),
+        },
+      }
+    })
+  }, [activeChatId])
 
-        return { ...prev, [activeChatId]: updatedChat }
-      })
-    },
-    [activeChatId, setChats]
-  )
+  /* ── Attach reflection data to the active chat ── */
+  const attachReflection = useCallback((reflection, sentenceLabels) => {
+    setChats((prev) => {
+      const chat = prev[activeChatId]
+      if (!chat) return prev
 
-  const attachReflection = useCallback(
-    (reflection, sentenceLabels) => {
-      setChats((prev) => {
-        const chat = prev[activeChatId]
-        if (!chat) return prev
+      return {
+        ...prev,
+        [activeChatId]: {
+          ...chat,
+          reflection,
+          sentenceLabels: sentenceLabels || [],
+          updatedAt: new Date().toISOString(),
+        },
+      }
+    })
+  }, [activeChatId])
 
-        return {
-          ...prev,
-          [activeChatId]: {
-            ...chat,
-            reflection,
-            sentenceLabels: sentenceLabels ?? [],
-          },
-        }
-      })
-    },
-    [activeChatId, setChats]
-  )
+  /* ── Delete a single chat ── */
+  const deleteChat = useCallback((chatId) => {
+    setChats((prev) => {
+      const updated = { ...prev }
+      delete updated[chatId]
 
-  const deleteChat = useCallback(
-    (chatId) => {
-      setChats((prev) => {
-        if (!prev[chatId]) return prev
-
-        const rest = { ...prev }
-        delete rest[chatId]
-
-        const remaining = Object.values(rest)
+      /* If we deleted the active chat, switch to most recent */
+      if (chatId === activeChatId) {
+        const remaining = Object.values(updated)
         if (remaining.length === 0) {
-          const chat = createEmptyChat()
-          setActiveChatId(chat.id)
-          return { [chat.id]: chat }
+          const fresh = createEmptyChat()
+          updated[fresh.id] = fresh
+          setActiveChatId(fresh.id)
+        } else {
+          const sorted = remaining.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+          setActiveChatId(sorted[0].id)
         }
+      }
 
-        if (activeChatId === chatId) {
-          const next = remaining.sort((a, b) => b.createdAt - a.createdAt)[0]
-          setActiveChatId(next.id)
-        }
+      return updated
+    })
+  }, [activeChatId])
 
-        return rest
-      })
-    },
-    [activeChatId, setChats, setActiveChatId]
-  )
-
+  /* ── Clear all chats ── */
   const clearAllChats = useCallback(() => {
-    const chat = createEmptyChat()
-    const nextChats = { [chat.id]: chat }
-    setChats(nextChats)
-    setActiveChatId(chat.id)
-    try {
-      localStorage.setItem(CHATS_STORAGE_KEY, JSON.stringify(nextChats))
-      localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, chat.id)
-    } catch {
-      /* storage full or unavailable */
-    }
-  }, [setChats, setActiveChatId])
+    const fresh = createEmptyChat()
+    setChats({ [fresh.id]: fresh })
+    setActiveChatId(fresh.id)
+    safeSetStorage(STORAGE_KEY, { [fresh.id]: fresh })
+  }, [])
 
   return {
     chats,
     activeChatId,
     activeChat,
-    groupedChats,
     createChat,
     selectChat,
     appendMessage,

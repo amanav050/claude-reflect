@@ -12,9 +12,9 @@ import { matchSentences } from './utils/matchSentences.js'
 function App() {
   const [theme, toggleTheme] = useTheme()
   const {
+    chats,
     activeChatId,
     activeChat,
-    groupedChats,
     createChat,
     selectChat,
     appendMessage,
@@ -36,9 +36,7 @@ function App() {
   )
 
   const latestChatIdRef = useRef(activeChatId)
-  useEffect(() => {
-    latestChatIdRef.current = activeChatId
-  }, [activeChatId])
+  useEffect(() => { latestChatIdRef.current = activeChatId }, [activeChatId])
 
   useEffect(() => {
     if (activeSentenceId) {
@@ -57,22 +55,17 @@ function App() {
   const handleSendMessage = useCallback(
     async (text) => {
       if (!text.trim() || isLoading) return
-
       setError(null)
       setIsLoading(true)
 
       appendMessage('user', text)
 
       const currentMessages = [
-        ...(activeChat?.messages || []).map((m) => ({
-          role: m.role,
-          content: m.content,
-        })),
+        ...(activeChat?.messages || []).map((m) => ({ role: m.role, content: m.content })),
         { role: 'user', content: text },
       ]
 
       const mainResult = await sendMainQuery(currentMessages)
-
       if (!mainResult.ok) {
         setError(mainResult.error || 'Something went wrong. Please try again.')
         setIsLoading(false)
@@ -102,12 +95,8 @@ function App() {
             attachReflection(null, [])
           }
         })
-        .catch(() => {
-          attachReflection(null, [])
-        })
-        .finally(() => {
-          setIsReflecting(false)
-        })
+        .catch(() => { attachReflection(null, []) })
+        .finally(() => { setIsReflecting(false) })
     },
     [isLoading, activeChat, appendMessage, sendMainQuery, getReflection, attachReflection]
   )
@@ -131,26 +120,18 @@ function App() {
 
   const showGlow = queryCount > 0 && queryCount <= 3
 
-  const lastUserMessage = activeChat?.messages
-    ?.filter((m) => m.role === 'user')
-    .slice(-1)[0]?.content || ''
-
-  const lastAssistantMessage = activeChat?.messages
-    ?.filter((m) => m.role === 'assistant')
-    .slice(-1)[0]?.content || ''
+  const lastUserMessage = activeChat?.messages?.filter((m) => m.role === 'user').slice(-1)[0]?.content || ''
+  const lastAssistantMessage = activeChat?.messages?.filter((m) => m.role === 'assistant').slice(-1)[0]?.content || ''
 
   return (
-    <div
-      className="flex h-screen overflow-hidden"
-      style={{ backgroundColor: 'var(--color-bg-page)' }}
-    >
+    <div className="flex h-screen overflow-hidden" style={{ backgroundColor: 'var(--color-bg-page)' }}>
       <Sidebar
-        chats={groupedChats}
+        chats={chats}
         activeChatId={activeChatId}
         onSelectChat={selectChat}
         onNewChat={createChat}
         onDeleteChat={deleteChat}
-        onClearAllChats={clearAllChats}
+        onClearAll={clearAllChats}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />

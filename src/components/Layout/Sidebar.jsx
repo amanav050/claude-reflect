@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import ClaudeLogo from '../ClaudeLogo.jsx'
 
-function Sidebar({ chats, activeChatId, onSelectChat, onNewChat, isOpen, onClose }) {
+function Sidebar({ chats, activeChatId, onSelectChat, onNewChat, onDeleteChat, onClearAll, isOpen, onClose }) {
   useEffect(() => {
     const handleEsc = (e) => {
       if (e.key === 'Escape' && isOpen) onClose()
@@ -21,27 +21,49 @@ function Sidebar({ chats, activeChatId, onSelectChat, onNewChat, isOpen, onClose
     else previous.push(chat)
   })
 
+  /* Sort within groups by updatedAt descending */
+  today.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+  previous.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
+
   const ChatItem = ({ chat }) => {
     const isActive = chat.id === activeChatId
     return (
-      <button
-        onClick={() => {
-          onSelectChat(chat.id)
-          if (window.innerWidth < 1024) onClose()
-        }}
-        className="w-full text-left px-3 py-2 rounded-lg text-[13px] truncate transition-all duration-150"
-        style={{
-          backgroundColor: isActive ? 'var(--color-bg-card)' : 'transparent',
-          color: isActive ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
-        }}
-        onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)' }}
-        onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = isActive ? 'var(--color-bg-card)' : 'transparent' }}
-      >
-        <span className="flex items-center gap-2">
-          {isActive && <span className="w-1 h-1 rounded-full shrink-0" style={{ backgroundColor: 'var(--color-sparkle)' }} />}
-          <span className="truncate">{chat.title || 'New chat'}</span>
-        </span>
-      </button>
+      <div className="group relative">
+        <button
+          onClick={() => {
+            onSelectChat(chat.id)
+            if (window.innerWidth < 1024) onClose()
+          }}
+          className="w-full text-left px-3 py-2 rounded-lg text-[13px] truncate transition-all duration-150 pr-8"
+          style={{
+            backgroundColor: isActive ? 'var(--color-bg-card)' : 'transparent',
+            color: isActive ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+          }}
+          onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.05)' }}
+          onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = isActive ? 'var(--color-bg-card)' : 'transparent' }}
+        >
+          <span className="flex items-center gap-2">
+            {isActive && <span className="w-1 h-1 rounded-full shrink-0" style={{ backgroundColor: 'var(--color-sparkle)' }} />}
+            <span className="truncate">{chat.title || 'New chat'}</span>
+          </span>
+        </button>
+        {/* Delete button — appears on hover */}
+        {onDeleteChat && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onDeleteChat(chat.id)
+            }}
+            className="absolute right-2 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 transition-opacity duration-150 hover:opacity-80"
+            style={{ color: 'var(--color-text-tertiary)' }}
+            aria-label="Delete chat"
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+              <path d="M2 2l8 8M10 2l-8 8" />
+            </svg>
+          </button>
+        )}
+      </div>
     )
   }
 
@@ -95,6 +117,21 @@ function Sidebar({ chats, activeChatId, onSelectChat, onNewChat, isOpen, onClose
           <p className="text-xs px-3 py-4 text-center" style={{ color: 'var(--color-text-tertiary)' }}>No conversations yet</p>
         )}
       </div>
+
+      {/* Clear all button at bottom */}
+      {onClearAll && Object.keys(chats).length > 1 && (
+        <div className="mt-2 pt-2 px-2" style={{ borderTop: '1px solid var(--color-border)' }}>
+          <button
+            onClick={() => {
+              if (window.confirm('Clear all conversations?')) onClearAll()
+            }}
+            className="w-full text-[11px] py-1.5 rounded transition-opacity hover:opacity-80"
+            style={{ color: 'var(--color-text-tertiary)' }}
+          >
+            Clear all chats
+          </button>
+        </div>
+      )}
     </div>
   )
 
