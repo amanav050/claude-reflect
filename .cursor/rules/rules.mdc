@@ -1,3 +1,145 @@
 ---
+---
+description: Strict coding rules Cursor must follow for the Claude Reflect project. Always apply.
+alwaysApply: true
+---
+
+# Claude Reflect — Coding Rules
+
+These rules are non-negotiable. Every file you write, every change you make, every suggestion you give must comply with all of them. Read this file in full before generating any code.
+
+## Tech Stack (fixed — do not substitute)
+
+- **Framework:** React 18 + Vite
+- **Styling:** Tailwind CSS (utility classes only)
+- **API layer:** Vercel Serverless Functions (Node.js runtime) at `api/chat.js`
+- **LLM provider:** Groq API (free tier). Primary model: `llama-3.3-70b-versatile`. Fallback model for reflection call if rate-limited: `llama-3.1-8b-instant`.
+- **Deployment target:** Vercel free tier
+- **Package manager:** npm
+
+## Dependencies
+
+- **No paid dependencies. Ever.**
+- **No external UI component libraries** (no MUI, Chakra, shadcn, Radix, etc.) unless I explicitly approve it. We build components from scratch using Tailwind.
+- **No animation libraries** (no Framer Motion, GSAP, etc.). All animations are CSS-only — transitions and `@keyframes`.
+- **Allowed runtime deps:** `react`, `react-dom`. That is it for the frontend unless I approve additions.
+- **Allowed dev deps:** `vite`, `@vitejs/plugin-react`, `tailwindcss`, `postcss`, `autoprefixer`. Nothing else without approval.
+- **The serverless function uses `fetch` (built into the Node 20 runtime on Vercel). Do not install the `groq-sdk` package** — direct HTTPS calls to `https://api.groq.com/openai/v1/chat/completions` keep the bundle minimal and avoid SDK breakage.
+
+## Security
+
+- **The Groq API key never leaves the serverless function.** It is read from `process.env.GROQ_API_KEY` inside `api/chat.js` only.
+- **Never** put the key in a Vite env variable prefixed with `VITE_` — that would expose it to the browser bundle.
+- **Never** log the API key, even in error logs.
+- The frontend never calls `api.groq.com` directly. All LLM calls go through `/api/chat`.
+
+## React Conventions
+
+- Functional components only. No class components.
+- Hooks for state and side effects. Custom hooks for reusable logic (e.g. `useGroqAPI`, `useTheme`, `useChatHistory`).
+- One component per file. The filename matches the default export.
+- Components are self-contained: own logic, own state where appropriate, own JSX. Lift state up only when two siblings need it.
+- Props are destructured in the function signature.
+- Use `useCallback`/`useMemo` only when there's a measurable reason, not by default.
+
+## Styling Rules
+
+- **Tailwind utility classes for all styling.** No inline `style={{}}` props except for dynamic values that can't be expressed in Tailwind (e.g. a computed `transform` value).
+- The only CSS file is `src/index.css`. It contains:
+  1. The three `@tailwind` directives
+  2. `@font-face` or Google Fonts `@import` for Inter
+  3. CSS custom properties (variables) for the full color palette under `:root` (light) and `.dark` (dark)
+  4. A minimal `@keyframes` block for the few animations we need
+- **All colors must reference CSS custom properties** defined in `index.css`. Dark/light mode works by toggling the `dark` class on `<html>` — never by conditional rendering of different color classes.
+- Example pattern in Tailwind config: extend `colors` to map semantic names (`bg-page`, `text-primary`, `accent-reflect`, `confidence-green`, etc.) to `var(--color-...)`.
+- Border radius: `rounded-xl` (12px) for cards/panels, `rounded-lg` (8px) for tags, `rounded-2xl` (20px) for message bubbles.
+- Spacing scale: stick to Tailwind defaults (`p-3`, `p-4`, `gap-3`, etc.). No arbitrary values like `p-[13px]` unless absolutely necessary.
+
+## File Naming
+
+- **PascalCase** for React component files: `ReflectPanel.jsx`, `MessageBubble.jsx`
+- **camelCase** for hooks, utilities, and non-component JS files: `useGroqAPI.js`, `parseReflection.js`, `matchSentences.js`
+- **kebab-case** for config and root files: `vite.config.js`, `tailwind.config.js`, `vercel.json`
+- Folders are PascalCase when they group components by feature (`Chat/`, `Reflect/`, `Layout/`, `Onboarding/`), camelCase otherwise (`hooks/`, `utils/`).
+
+## Error Handling
+
+- **Every API call is wrapped in try/catch.** No exceptions.
+- **Every `JSON.parse` is wrapped in try/catch.** If parsing the reflection JSON fails, fall back to the friendly message defined in `context.md` ("Reflect couldn't analyze this response..."). Never let the app crash.
+- The serverless function returns proper HTTP status codes (200 success, 4xx client errors, 5xx server errors) with a JSON body `{ error: "human-readable message" }` on failure.
+- The frontend reads `response.ok` before reading the body, and shows the error message inline.
+- Add a top-level React error boundary that catches render errors and shows a graceful fallback with a "reload" button.
+- **No `console.log` in committed code.** Use `console.error` only for genuinely unexpected errors that aid debugging. Remove all dev-time `console.log` before each phase ends.
+
+## Responsive Design
+
+- **Mobile-first.** Write base styles for mobile, then layer up with `sm:`, `md:`, `lg:` breakpoints.
+- Sidebar: `220px` fixed width on `lg:` and above (collapsible), overlay drawer below `lg:`.
+- Reflect panel: side-by-side with chat on `lg:` and above, collapsible accordion below `lg:`.
+- Touch targets: minimum `44px` height for any tappable element on mobile.
+- Test every component at 375px width (iPhone SE), 768px (tablet), and 1280px (laptop) — comment in code if a specific breakpoint required special handling.
+
+## JSON Parsing & Sentence Matching
+
+- The reflection JSON from Groq is **not guaranteed** to be valid. Always strip surrounding markdown fences (` ```json ` … ` ``` `) before parsing, then `JSON.parse` inside a try/catch.
+- Validate the parsed shape: check that `reasoning_skeleton`, `uncertainty_flags`, `gaps`, `critical_question`, and `sentence_labels` exist and are of the expected types. If any are missing, fall back gracefully — don't throw.
+- **Sentence matching is fuzzy, never exact.** The reflection's `sentence_labels[].sentence` may differ from the response text by whitespace, punctuation, or a word or two. Use a normalize-and-`includes()` strategy: lowercase, strip punctuation, collapse whitespace on both sides, then check substring match in either direction.
+- If a sentence from `sentence_labels` cannot be matched to the response, skip its indicator silently. Do not log a warning to the user. Optionally `console.error` for debugging in development.
+
+## Animations
+
+- CSS only. Defined as Tailwind utilities (`transition-colors`, `duration-200`, etc.) or `@keyframes` in `index.css`.
+- Required animations:
+  - `0.3s` background-color fade for sentence highlight (amber → transparent)
+  - `0.2s` `transform` transition for sidebar slide
+  - `0.2s` `transition-colors` on theme toggle
+  - `1.02` scale on hover for primary buttons (`hover:scale-[1.02]`)
+  - Gentle opacity pulse for loading dots (custom `@keyframes`)
+  - Subtle border glow on Reflect panel for first 2–3 queries of a session (custom `@keyframes`, removed via class toggle after threshold)
+- Respect `prefers-reduced-motion`: wrap non-essential animations in `@media (prefers-reduced-motion: no-preference)`.
+
+## Browser Support
+
+- Must work on the latest two versions of Chrome, Safari, Firefox, and Edge.
+- Must work on mobile Safari (iOS 16+) and Chrome Android.
+- No polyfills needed — Vite + Tailwind handle this.
+
+## Loading & Empty States
+
+- **Every async UI surface has three states:** loading, empty, populated.
+- Chat area empty state: centered welcome message ("What can I help you with?").
+- Reflect panel empty state (before first message): hidden or shows a one-line hint about what it does.
+- Reflect panel loading state: skeleton placeholders matching the four-component layout, with a gentle pulse.
+- Sidebar empty state: "No chats yet" muted text above the "New chat" button.
+
+## Code Quality
+
+- Clean, readable, well-commented. **Comments explain *why*, not *what*** — if the code is self-explanatory, no comment needed. If a regex, a fuzzy-match heuristic, or a non-obvious design decision is in play, comment it.
+- No commented-out dead code. Delete what's not used.
+- No `TODO` comments left in committed code at the end of a phase — either resolve it or open a tracked issue in your head and tell me.
+- Components ideally under 150 lines. Hooks ideally under 100. If something grows past that, propose a split before continuing.
+
+## What You Must NOT Do
+
+- Do not invent dependencies. If a feature needs a library, ask me first.
+- Do not refactor files outside the scope of the current phase's prompt. Stay focused.
+- Do not change the file structure defined in `architecture.md` without telling me.
+- Do not skip error handling because "it probably won't happen."
+- Do not produce placeholder lorem ipsum content where real fallback copy is required (e.g. the Reflect panel empty state — write the real copy).
+- Do not output multi-file changes without a one-line summary at the top of your response listing every file touched.
+
+## When Producing Output
+
+At the end of every Cursor response that changes code, include a short verification block:
+
+```
+Files changed:
+- path/to/file.jsx (created | modified)
+- path/to/other.js (created | modified)
+
+To verify: <one or two sentences telling me exactly what to click/type/check>
+```
+
+That's it. Stick to this and the project stays clean.
 alwaysApply: true
 ---
