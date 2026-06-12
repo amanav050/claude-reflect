@@ -1,167 +1,216 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
-import Sidebar from './components/Layout/Sidebar.jsx'
-import ChatArea from './components/Chat/ChatArea.jsx'
-import ReflectPanel from './components/Reflect/ReflectPanel.jsx'
-import FirstTimeCallout from './components/Onboarding/FirstTimeCallout.jsx'
-import { useTheme } from './hooks/useTheme.js'
-import { useChatHistory } from './hooks/useChatHistory.js'
-import { useGroqAPI } from './hooks/useGroqAPI.js'
-import { parseReflection } from './utils/parseReflection.js'
-import { matchSentences } from './utils/matchSentences.js'
+import { useState, useRef, useEffect } from 'react'
 
-function App() {
-  const [theme, toggleTheme] = useTheme()
-  const {
-    chats, activeChatId, activeChat, createChat, selectChat,
-    appendMessage, attachReflection, deleteChat, clearAllChats,
-  } = useChatHistory()
-  const { sendMainQuery, getReflection } = useGroqAPI()
+const CATEGORIES = [
+  { label: 'Write', icon: '✏️', key: 'write' },
+  { label: 'Code', icon: '</>', key: 'code' },
+  { label: 'Research', icon: '🔍', key: 'research' },
+  { label: 'Life stuff', icon: '📋', key: 'life' },
+]
+const SUB_CHIPS = {
+  write: ['Draft a LinkedIn post about...', 'Write a cold email to...', 'Help me write a cover letter for...', 'Create a blog post on...'],
+  code: ['Debug this error: ', 'Build a React component that...', 'Explain this code: ', 'Review my code for...'],
+  research: ['Compare the pros and cons of...', 'Summarize the latest on...', 'What should I know before...', 'Break down how... works'],
+  life: ['Plan a weekly routine for...', 'Help me decide between...', 'Create a budget for...', 'Write a message to...'],
+}
 
-  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1024)
-  const [isLoading, setIsLoading] = useState(false)
-  const [isReflecting, setIsReflecting] = useState(false)
-  const [error, setError] = useState(null)
-  const [queryCount, setQueryCount] = useState(0)
-  const [activeSentenceId, setActiveSentenceId] = useState(null)
-  const [activeFlagId, setActiveFlagId] = useState(null)
-  const [showCallout, setShowCallout] = useState(
-    () => localStorage.getItem('claude_reflect_callout_dismissed') !== 'true'
-  )
+const SpeechRecognition = typeof window !== 'undefined'
+  ? window.SpeechRecognition || window.webkitSpeechRecognition
+  : null
 
-  const latestChatIdRef = useRef(activeChatId)
-  useEffect(() => { latestChatIdRef.current = activeChatId }, [activeChatId])
-  useEffect(() => { if (activeSentenceId) { const t = setTimeout(() => setActiveSentenceId(null), 1500); return () => clearTimeout(t) } }, [activeSentenceId])
-  useEffect(() => { if (activeFlagId) { const t = setTimeout(() => setActiveFlagId(null), 1500); return () => clearTimeout(t) } }, [activeFlagId])
+function InputBar({ onSend, disabled, showChips = false }) {
+  const [text, setText] = useState('')
+  const [isListening, setIsListening] = useState(false)
+  const [chipState, setChipState] = useState('categories')
+  const recognitionRef = useRef(null)
+  const inputRef = useRef(null)
 
-  const handleSendMessage = useCallback(async (text) => {
-    if (!text.trim() || isLoading) return
-    setError(null)
-    setIsLoading(true)
-
-    const userMsg = text.trim()
-    appendMessage('user', userMsg)
-
-    const history = [
-      ...(activeChat?.messages || []).map((m) => ({ role: m.role, content: m.content })),
-      { role: 'user', content: userMsg },
-    ]
-
+  useEffect(() => {
+    if (!SpeechRecognition) return
     try {
-      const mainResult = await sendMainQuery(history)
-      if (!mainResult.ok) {
-        setError(mainResult.error || 'Something went wrong.')
-        setIsLoading(false)
-        return
+      const r = new SpeechRecognition()
+      r.continuous = false
+      r.interimResults = false
+      r.lang = 'en-US'
+      r.onresult = (e) => {
+        const transcript = e.results[0][0].transcript
+        setText((prev) => (prev ? prev + ' ' + transcript : transcript))
+        setIsListening(false)
       }
-
-      const responseText = mainResult.data.response
-      appendMessage('assistant', responseText)
-      setIsLoading(false)
-      setQueryCount((c) => c + 1)
-
-      setIsReflecting(true)
-      const chatIdAtSend = latestChatIdRef.current
-
-      getReflection(userMsg, responseText)
-        .then((r) => {
-          if (latestChatIdRef.current !== chatIdAtSend) return
-          if (r.ok) {
-            const parsed = parseReflection(r.data.reflection)
-            if (parsed) {
-              attachReflection(parsed, matchSentences(responseText, parsed.sentence_labels || []))
-            } else { attachReflection(null, []) }
-          } else { attachReflection(null, []) }
-        })
-        .catch(() => { attachReflection(null, []) })
-        .finally(() => { setIsReflecting(false) })
+      r.onerror = () => setIsListening(false)
+      r.onend = () => setIsListening(false)
+      recognitionRef.current = r
     } catch {
-      setError('Connection lost. Please try again.')
-      setIsLoading(false)
+      recognitionRef.current = null
     }
-  }, [isLoading, activeChat, appendMessage, sendMainQuery, getReflection, attachReflection])
-
-  const handleSentenceClick = useCallback((id) => {
-    setActiveFlagId(id)
-    const el = document.querySelector(`[data-flag-id="${id}"]`)
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    return () => {
+      try { recognitionRef.current?.abort() } catch {}
+    }
   }, [])
 
-  const handleFlagClick = useCallback((id) => {
-    setActiveSentenceId(id)
-    const el = document.getElementById(id)
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [])
+  const toggleVoice = () => {
+    if (!recognitionRef.current) return
+    try {
+      if (isListening) {
+        recognitionRef.current.stop()
+        setIsListening(false)
+      } else {
+        recognitionRef.current.start()
+        setIsListening(true)
+      }
+    } catch {
+      setIsListening(false)
+    }
+  }
 
-  const handleDismissCallout = useCallback(() => {
-    setShowCallout(false)
-    localStorage.setItem('claude_reflect_callout_dismissed', 'true')
-  }, [])
+  const submit = () => {
+    const trimmed = text.trim()
+    if (!trimmed || disabled) return
+    onSend(trimmed)
+    setText('')
+    setChipState('categories')
+  }
 
-  const showGlow = queryCount > 0 && queryCount <= 3
-  const lastUserMsg = activeChat?.messages?.filter((m) => m.role === 'user').slice(-1)[0]?.content || ''
-  const lastAsstMsg = activeChat?.messages?.filter((m) => m.role === 'assistant').slice(-1)[0]?.content || ''
+  const handleFormSubmit = (e) => {
+    e.preventDefault()
+    submit()
+  }
+
+  const handleChipClick = (prompt) => {
+    setText(prompt)
+    setChipState('categories')
+    setTimeout(() => inputRef.current?.focus(), 100)
+  }
+
+  const hasText = text.trim().length > 0
 
   return (
-    <div className="flex h-[100dvh] overflow-hidden" style={{ backgroundColor: 'var(--color-bg-page)' }}>
-      <Sidebar
-        chats={chats}
-        activeChatId={activeChatId}
-        onSelectChat={selectChat}
-        onNewChat={createChat}
-        onDeleteChat={deleteChat}
-        onClearAll={clearAllChats}
-        isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-      />
+    <div className="px-3 py-3 sm:px-4">
+      <form
+        onSubmit={handleFormSubmit}
+        className="flex items-center gap-2 rounded-2xl px-3 py-2 sm:py-2.5 transition-all duration-200"
+        style={{
+          backgroundColor: 'var(--color-bg-card)',
+          border: '1px solid var(--color-border)',
+          boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
+        }}
+      >
+        {/* Plus icon */}
+        <button
+          type="button"
+          className="flex items-center justify-center w-10 h-10 min-w-[40px] min-h-[40px] rounded-full shrink-0 hover:opacity-70 active:opacity-50 transition-opacity"
+          style={{ color: 'var(--color-text-tertiary)' }}
+          aria-label="Attach"
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+            <path d="M9 3v12M3 9h12" />
+          </svg>
+        </button>
 
-      <div className="flex flex-col flex-1 min-w-0 h-[100dvh]">
-        {/* Top area */}
-        <div className="shrink-0">
-          {!sidebarOpen && (
-            <button
-              onClick={() => setSidebarOpen(true)}
-              className="absolute top-3 left-3 z-10 w-11 h-11 flex items-center justify-center rounded-lg transition-opacity hover:opacity-70 active:opacity-50"
-              style={{ color: 'var(--color-text-secondary)' }}
-              aria-label="Open sidebar"
-            >
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                <path d="M3 5h14M3 10h14M3 15h14" />
-              </svg>
-            </button>
+        {/* Input */}
+        <input
+          ref={inputRef}
+          type="text"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          disabled={disabled}
+          placeholder="How can I help you today?"
+          autoComplete="off"
+          autoCorrect="on"
+          enterKeyHint="send"
+          className="flex-1 bg-transparent text-sm outline-none disabled:opacity-50 disabled:cursor-not-allowed min-w-0"
+          style={{ color: 'var(--color-text-primary)', fontSize: '16px' }}
+        />
+
+        {/* Voice button */}
+        {SpeechRecognition && recognitionRef.current && (
+          <button
+            type="button"
+            onClick={toggleVoice}
+            disabled={disabled}
+            aria-label={isListening ? 'Stop listening' : 'Start voice input'}
+            className={`flex items-center justify-center w-10 h-10 min-w-[40px] min-h-[40px] rounded-full shrink-0 transition-all active:opacity-50 ${
+              isListening ? 'animate-mic-pulse' : 'hover:opacity-70'
+            }`}
+            style={{
+              color: isListening ? 'var(--color-sparkle)' : 'var(--color-text-tertiary)',
+            }}
+          >
+            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="5" y="1" width="6" height="9" rx="3" />
+              <path d="M2.5 7.5a5.5 5.5 0 0 0 11 0" />
+              <path d="M8 13.5V15" />
+            </svg>
+          </button>
+        )}
+
+        {/* Send button */}
+        <button
+          type="submit"
+          disabled={disabled || !hasText}
+          aria-label="Send message"
+          className="flex items-center justify-center w-10 h-10 min-w-[40px] min-h-[40px] rounded-full shrink-0 transition-all duration-200 disabled:opacity-20 disabled:cursor-not-allowed active:scale-95"
+          style={{
+            backgroundColor: hasText ? 'var(--color-accent-reflect)' : 'transparent',
+            color: hasText ? '#FFFFFF' : 'var(--color-text-tertiary)',
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 8h10M9 4l4 4-4 4" />
+          </svg>
+        </button>
+      </form>
+
+      {/* Quick-action chips */}
+      {showChips && (
+        <div className="flex items-center justify-center gap-2 mt-3 flex-wrap animate-fade-in px-1">
+          {chipState === 'categories' ? (
+            CATEGORIES.map((c) => (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => setChipState(c.key)}
+                className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-full text-xs transition-all active:scale-95 hover:scale-[1.03]"
+                style={{
+                  backgroundColor: 'var(--color-bg-card)',
+                  color: 'var(--color-text-secondary)',
+                  border: '1px solid var(--color-border)',
+                }}
+              >
+                <span className="text-sm">{c.icon}</span>
+                <span>{c.label}</span>
+              </button>
+            ))
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setChipState('categories')}
+                className="text-[11px] px-2.5 py-2 rounded-full active:opacity-50"
+                style={{ color: 'var(--color-text-tertiary)' }}
+              >
+                ← Back
+              </button>
+              {SUB_CHIPS[chipState]?.map((prompt, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => handleChipClick(prompt)}
+                  className="px-3 py-2.5 rounded-full text-xs transition-all active:scale-95 hover:scale-[1.03]"
+                  style={{
+                    backgroundColor: 'var(--color-bg-card)',
+                    color: 'var(--color-text-secondary)',
+                    border: '1px solid var(--color-border)',
+                  }}
+                >
+                  {prompt}
+                </button>
+              ))}
+            </>
           )}
-          {showCallout && <FirstTimeCallout onDismiss={handleDismissCallout} />}
         </div>
-
-        {/* Main content — column on mobile, row on desktop */}
-        <div className="flex flex-col lg:flex-row flex-1 min-h-0">
-          {/* Chat area — takes all available space */}
-          <div className="flex-1 min-h-0 min-w-0 flex flex-col">
-            <ChatArea
-              chat={activeChat}
-              onSendMessage={handleSendMessage}
-              isLoading={isLoading}
-              error={error}
-              activeSentenceId={activeSentenceId}
-              onSentenceClick={handleSentenceClick}
-            />
-          </div>
-
-          {/* Reflect panel */}
-          <ReflectPanel
-            reflection={activeChat?.reflection}
-            isLoading={isReflecting}
-            activeFlagId={activeFlagId}
-            onFlagClick={handleFlagClick}
-            originalQuery={lastUserMsg}
-            mainResponse={lastAsstMsg}
-            showGlow={showGlow}
-            theme={theme}
-            onToggleTheme={toggleTheme}
-          />
-        </div>
-      </div>
+      )}
     </div>
   )
 }
 
-export default App
+export default InputBar
