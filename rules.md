@@ -12,7 +12,7 @@ These rules are non-negotiable. Every file you write, every change you make, eve
 - **Framework:** React 18 + Vite
 - **Styling:** Tailwind CSS (utility classes only)
 - **API layer:** Vercel Serverless Functions (Node.js runtime) at `api/chat.js`
-- **LLM provider:** Groq API (free tier). Primary model: `llama-3.3-70b-versatile`. Fallback model for reflection call if rate-limited: `llama-3.1-8b-instant`.
+- **LLM provider:** Groq API (free tier). Primary model: `llama-3.3-70b-versatile`. Fallback model for reflection call if rate-limited: 'openai/gpt-oss-20b'.
 - **Deployment target:** Vercel free tier
 - **Package manager:** npm
 
