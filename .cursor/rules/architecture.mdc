@@ -27,7 +27,7 @@ Claude Reflect is a single-page React application that wraps an AI chat interfac
 [Vercel Serverless Function api/chat.js]
        │  routes on body.type → main
        │  calls Groq /openai/v1/chat/completions
-       │  model: llama-3.3-70b-versatile, temperature: 0.7, max_tokens: 1500
+       │  model: openai/gpt-oss-20b, temperature: 0.7, max_tokens: 1500
        ▼
 [Main response text returned to frontend as { response: "..." }]
        │
@@ -41,7 +41,7 @@ Claude Reflect is a single-page React application that wraps an AI chat interfac
 [Vercel Serverless Function]
        │  routes on body.type → reflection
        │  calls Groq with strict JSON-only system prompt
-       │  model: llama-3.3-70b-versatile, temperature: 0.3, max_tokens: 2000
+       │  model: openai/gpt-oss-20b, temperature: 0.3, max_tokens: 2000
        ▼
 [Reflection raw text returned as { reflection: "..." }]
        │
@@ -70,7 +70,7 @@ Claude Reflect is a single-page React application that wraps an AI chat interfac
    Frontend POST /api/chat  body: { type: "followup", query, response,
                                     criticalQuestion, briefSummary }
    → routes on body.type → followup
-   → calls Groq, model: llama-3.3-70b-versatile, temperature: 0.5, max_tokens: 800
+   → calls Groq, model: openai/gpt-oss-20b, temperature: 0.5, max_tokens: 800
    → response renders inline beneath the question]
 ```
 

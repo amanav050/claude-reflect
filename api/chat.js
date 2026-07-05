@@ -1,6 +1,6 @@
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
-const MODEL = 'llama-3.3-70b-versatile'
-const FALLBACK_MODEL = 'llama-3.1-8b-instant'
+const MODEL = 'openai/gpt-oss-20b'
+const FALLBACK_MODEL = 'openai/gpt-oss-20b'
 
 const REFLECTION_SYSTEM_PROMPT =
   'You are an AI reasoning analyst. Analyze the given AI response and return a structured JSON assessment. Be genuinely honest about confidence levels — do not default to high confidence on everything. Flag real uncertainties. Identify real gaps. Ask a genuinely challenging critical question. Return ONLY valid JSON. No markdown backticks. No preamble.'
