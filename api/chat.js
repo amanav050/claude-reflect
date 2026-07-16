@@ -1,52 +1,43 @@
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const MODEL = 'openai/gpt-oss-20b'
-const FALLBACK_MODEL = 'openai/gpt-oss-20b'
+const REFLECTION_MODEL = 'openai/gpt-oss-20b'
+const FALLBACK_MODEL = 'qwen/qwen3-32b'
 
-const REFLECTION_SYSTEM_PROMPT =
-  'You are an AI reasoning analyst. Analyze the given AI response and return a structured JSON assessment. Be genuinely honest about confidence levels — do not default to high confidence on everything. Flag real uncertainties. Identify real gaps. Ask a genuinely challenging critical question. Return ONLY valid JSON. No markdown backticks. No preamble.'
+const REFLECTION_SYSTEM_PROMPT = `You are an AI reasoning analyst. You MUST return ONLY a valid JSON object.
+
+CRITICAL RULES:
+- Start your response with { and end with }
+- No markdown backticks
+- No text before or after the JSON
+- No explanation outside the JSON
+- No \`\`\`json wrapper
+- Be genuinely honest about confidence levels
+- Do not default to high confidence on everything
+- Flag real uncertainties and identify real gaps`
 
 const REFLECTION_JSON_SCHEMA = `{
   "reasoning_skeleton": [
-    {
-      "step": "Description of this reasoning step",
-      "label": "from_input | general_knowledge | inference | assumption",
-      "detail": "Brief explanation of the basis for this step"
-    }
+    {"step": "Description of reasoning step", "label": "from_input | general_knowledge | inference | assumption", "detail": "Brief basis explanation"}
   ],
   "uncertainty_flags": [
-    {
-      "sentence": "The exact sentence from the response that is flagged",
-      "reason": "Why confidence is lower on this specific claim",
-      "severity": "low | medium | high"
-    }
+    {"sentence": "Exact sentence from the response", "reason": "Why confidence is lower", "severity": "low | medium | high"}
   ],
   "gaps": [
-    {
-      "topic": "What was not covered",
-      "reason": "Why it was omitted or could not be addressed"
-    }
+    {"topic": "What was not covered", "reason": "Why it was omitted"}
   ],
   "critical_question": {
-    "question": "One specific, sharp question that challenges the user to think before acting",
-    "context": "Why this question matters for the user's specific situation"
+    "question": "One sharp question challenging the user to think before acting",
+    "context": "Why this question matters"
   },
   "sentence_labels": [
-    {
-      "sentence": "Each sentence from the response",
-      "label": "confident | inference | assumption | uncertain",
-      "basis": "What this claim is based on"
-    }
+    {"sentence": "Each sentence from the response", "label": "confident | inference | assumption | uncertain", "basis": "What this is based on"}
   ]
 }`
 
 function parseRequestBody(body) {
   if (body == null) return null
   if (typeof body === 'string') {
-    try {
-      return JSON.parse(body)
-    } catch {
-      return null
-    }
+    try { return JSON.parse(body) } catch { return null }
   }
   if (typeof body === 'object') return body
   return null
@@ -64,74 +55,54 @@ async function callGroq(apiKey, messages, options = {}, attempt = 0, usedFallbac
     allowFallback = false,
   } = options
 
-  const groqRes = await fetch(GROQ_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature,
-      max_tokens,
-    }),
-  })
+  try {
+    const groqRes = await fetch(GROQ_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({ model, messages, temperature, max_tokens }),
+    })
 
-  if (groqRes.status === 429 && attempt < 2) {
-    const backoffMs = attempt === 0 ? 1000 : 2000
-    await sleep(backoffMs)
-    return callGroq(apiKey, messages, options, attempt + 1, usedFallback)
+    if (groqRes.status === 429 && attempt < 2) {
+      await sleep(attempt === 0 ? 1000 : 2000)
+      return callGroq(apiKey, messages, options, attempt + 1, usedFallback)
+    }
+
+    if (!groqRes.ok && allowFallback && !usedFallback && model !== FALLBACK_MODEL) {
+      return callGroq(apiKey, messages, { ...options, model: FALLBACK_MODEL }, 0, true)
+    }
+
+    return groqRes
+  } catch (err) {
+    if (allowFallback && !usedFallback && model !== FALLBACK_MODEL) {
+      return callGroq(apiKey, messages, { ...options, model: FALLBACK_MODEL }, 0, true)
+    }
+    throw err
   }
-
-  if (
-    groqRes.status === 429 &&
-    allowFallback &&
-    !usedFallback &&
-    model !== FALLBACK_MODEL
-  ) {
-    return callGroq(
-      apiKey,
-      messages,
-      { ...options, model: FALLBACK_MODEL },
-      0,
-      true,
-    )
-  }
-
-  return groqRes
 }
 
-async function extractGroqContent(groqRes, res) {
+async function extractContent(groqRes, res) {
   if (groqRes.status === 429) {
-    res.status(429).json({
-      error: 'Rate limit reached. Try again in a moment.',
-    })
+    res.status(429).json({ error: 'Rate limit reached. Try again in a moment.' })
     return null
   }
 
-  let groqData
-  try {
-    groqData = await groqRes.json()
-  } catch {
-    res.status(500).json({
-      error: 'Reflection unavailable. Please retry.',
-    })
+  let data
+  try { data = await groqRes.json() } catch {
+    res.status(500).json({ error: 'Could not parse response. Please retry.' })
     return null
   }
 
   if (!groqRes.ok) {
-    res.status(500).json({
-      error: 'Reflection unavailable. Please retry.',
-    })
+    res.status(500).json({ error: 'Service unavailable. Please retry.' })
     return null
   }
 
-  const content = groqData?.choices?.[0]?.message?.content
+  const content = data?.choices?.[0]?.message?.content
   if (typeof content !== 'string' || content.length === 0) {
-    res.status(500).json({
-      error: 'Reflection unavailable. Please retry.',
-    })
+    res.status(500).json({ error: 'Empty response. Please retry.' })
     return null
   }
 
@@ -140,41 +111,39 @@ async function extractGroqContent(groqRes, res) {
 
 async function handleMain(apiKey, body, res) {
   if (!Array.isArray(body.messages) || body.messages.length === 0) {
-    return res.status(400).json({
-      error: 'Invalid request. Missing required fields.',
-    })
+    return res.status(400).json({ error: 'Invalid request. Missing required fields.' })
   }
 
-  const groqRes = await callGroq(apiKey, body.messages, {
+  const systemMsg = {
+    role: 'system',
+    content: 'You are a helpful, thoughtful AI assistant. Respond thoroughly and naturally. Use markdown formatting — headers, bold, numbered lists, bullet points — for clear, well-structured responses.',
+  }
+
+  const groqRes = await callGroq(apiKey, [systemMsg, ...body.messages], {
     temperature: 0.7,
     max_tokens: 1500,
+    model: MODEL,
   })
 
-  const content = await extractGroqContent(groqRes, res)
-  if (content === null) return undefined
-
+  const content = await extractContent(groqRes, res)
+  if (content === null) return
   return res.status(200).json({ response: content })
 }
 
 async function handleReflection(apiKey, body, res) {
-  if (
-    typeof body.query !== 'string' ||
-    body.query.trim().length === 0 ||
-    typeof body.response !== 'string' ||
-    body.response.trim().length === 0
-  ) {
-    return res.status(400).json({
-      error: 'Invalid request. Missing required fields.',
-    })
+  if (!body.query || !body.response) {
+    return res.status(400).json({ error: 'Invalid request. Missing required fields.' })
   }
 
   const userPrompt = `Original user query:
-${body.query}
+"${body.query}"
 
 AI response to analyze:
+"""
 ${body.response}
+"""
 
-Return JSON matching this exact schema:
+Return a JSON object matching this exact schema. Remember: output ONLY the JSON, nothing else.
 ${REFLECTION_JSON_SCHEMA}`
 
   const groqRes = await callGroq(
@@ -186,64 +155,92 @@ ${REFLECTION_JSON_SCHEMA}`
     {
       temperature: 0.3,
       max_tokens: 2000,
+      model: REFLECTION_MODEL,
       allowFallback: true,
     },
   )
 
-  const content = await extractGroqContent(groqRes, res)
-  if (content === null) return undefined
+  const content = await extractContent(groqRes, res)
+  if (content === null) return
 
-  return res.status(200).json({ reflection: content })
-}
+  // Clean up common issues — strip markdown fences, leading text, trailing text
+  let cleaned = content.trim()
+  cleaned = cleaned.replace(/^```json\s*/i, '').replace(/```\s*$/i, '')
+  cleaned = cleaned.replace(/^```\s*/i, '').replace(/```\s*$/i, '')
 
-const FOLLOWUP_SYSTEM_PROMPT =
-  'You are a thoughtful AI assistant helping a user think critically about a previous AI response. Be specific, practical, and genuinely helpful. Don\'t be generic.'
-
-async function handleFollowup(apiKey, body, res) {
-  if (
-    typeof body.query !== 'string' ||
-    body.query.trim().length === 0 ||
-    typeof body.criticalQuestion !== 'string' ||
-    body.criticalQuestion.trim().length === 0
-  ) {
-    return res.status(400).json({
-      error: 'Invalid request. Missing required fields.',
-    })
+  // Find the first { and last } to extract JSON
+  const firstBrace = cleaned.indexOf('{')
+  const lastBrace = cleaned.lastIndexOf('}')
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    cleaned = cleaned.slice(firstBrace, lastBrace + 1)
   }
 
-  const briefSummary =
-    typeof body.briefSummary === 'string' && body.briefSummary.trim().length > 0
-      ? body.briefSummary.trim()
-      : typeof body.response === 'string'
-        ? body.response.slice(0, 150)
-        : ''
+  // Validate it's parseable JSON before sending
+  try {
+    JSON.parse(cleaned)
+  } catch {
+    // If still not valid JSON, try the fallback model
+    if (groqRes._model !== FALLBACK_MODEL) {
+      const fallbackRes = await callGroq(
+        apiKey,
+        [
+          { role: 'system', content: REFLECTION_SYSTEM_PROMPT },
+          { role: 'user', content: userPrompt },
+        ],
+        {
+          temperature: 0.2,
+          max_tokens: 2000,
+          model: FALLBACK_MODEL,
+        },
+      )
+      const fallbackContent = await extractContent(fallbackRes, res)
+      if (fallbackContent === null) return
 
-  const userPrompt = `Original user query:
-${body.query.trim()}
+      let fallbackCleaned = fallbackContent.trim()
+        .replace(/^```json\s*/i, '').replace(/```\s*$/i, '')
+        .replace(/^```\s*/i, '').replace(/```\s*$/i, '')
+      const fb = fallbackCleaned.indexOf('{')
+      const lb = fallbackCleaned.lastIndexOf('}')
+      if (fb !== -1 && lb !== -1) fallbackCleaned = fallbackCleaned.slice(fb, lb + 1)
 
-Brief summary of the AI response:
-${briefSummary}
+      return res.status(200).json({ reflection: fallbackCleaned })
+    }
 
-Critical question to explore:
-${body.criticalQuestion.trim()}
+    return res.status(200).json({ reflection: cleaned })
+  }
 
-Help me think through this question. What should I consider? What might I be missing?`
+  return res.status(200).json({ reflection: cleaned })
+}
+
+async function handleFollowup(apiKey, body, res) {
+  if (!body.query || !body.criticalQuestion) {
+    return res.status(400).json({ error: 'Invalid request. Missing required fields.' })
+  }
+
+  const briefSummary = body.briefSummary || (body.response ? body.response.slice(0, 150) : '')
 
   const groqRes = await callGroq(
     apiKey,
     [
-      { role: 'system', content: FOLLOWUP_SYSTEM_PROMPT },
-      { role: 'user', content: userPrompt },
+      {
+        role: 'system',
+        content: "You are a thoughtful AI assistant helping a user think critically about a previous AI response. Be specific, practical, and genuinely helpful. Don't be generic.",
+      },
+      {
+        role: 'user',
+        content: `Original query: "${body.query}"\n\nBrief summary: ${briefSummary}\n\nCritical question: "${body.criticalQuestion}"\n\nHelp me think through this. What should I consider? What might I be missing?`,
+      },
     ],
     {
       temperature: 0.5,
       max_tokens: 800,
+      model: MODEL,
+      allowFallback: true,
     },
   )
 
-  const content = await extractGroqContent(groqRes, res)
-  if (content === null) return undefined
-
+  const content = await extractContent(groqRes, res)
+  if (content === null) return
   return res.status(200).json({ followup: content })
 }
 
@@ -255,32 +252,20 @@ export default async function handler(req, res) {
     }
 
     const apiKey = process.env.GROQ_API_KEY
-    if (!apiKey) {
-      return res.status(500).json({ error: 'Server misconfigured' })
-    }
+    if (!apiKey) return res.status(500).json({ error: 'Server misconfigured' })
 
     const body = parseRequestBody(req.body)
-    if (!body || typeof body.type !== 'string') {
-      return res.status(400).json({
-        error: 'Invalid request. Missing required fields.',
-      })
+    if (!body || !body.type) {
+      return res.status(400).json({ error: 'Invalid request. Missing required fields.' })
     }
 
     switch (body.type) {
-      case 'main':
-        return await handleMain(apiKey, body, res)
-      case 'reflection':
-        return await handleReflection(apiKey, body, res)
-      case 'followup':
-        return await handleFollowup(apiKey, body, res)
-      default:
-        return res.status(400).json({
-          error: 'Invalid request. Missing required fields.',
-        })
+      case 'main': return await handleMain(apiKey, body, res)
+      case 'reflection': return await handleReflection(apiKey, body, res)
+      case 'followup': return await handleFollowup(apiKey, body, res)
+      default: return res.status(400).json({ error: 'Invalid request type.' })
     }
   } catch {
-    return res.status(500).json({
-      error: 'Reflection unavailable. Please retry.',
-    })
+    return res.status(500).json({ error: 'Something went wrong. Please retry.' })
   }
 }
