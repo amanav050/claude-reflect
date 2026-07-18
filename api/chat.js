@@ -1,7 +1,7 @@
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const MODEL = 'openai/gpt-oss-20b'
 const REFLECTION_MODEL = 'openai/gpt-oss-20b'
-const FALLBACK_MODEL = 'qwen/qwen3-32b'
+const FALLBACK_MODEL = 'openai/gpt-oss-120b'
 
 const REFLECTION_SYSTEM_PROMPT = `You are an AI reasoning analyst. You MUST return ONLY a valid JSON object.
 
