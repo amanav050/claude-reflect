@@ -33,6 +33,7 @@ const MINIMAL_REFLECTION = JSON.stringify({
   ],
   gaps: [
     { topic: "Alternative perspectives", reason: "Response may not cover all viewpoints" },
+    { topic: "Source verification", reason: "Claims are not cited to specific sources" },
   ],
   critical_question: {
     question: "What assumptions are you making about the accuracy of this response?",
@@ -74,7 +75,7 @@ export default async function handler(req, res) {
     if (body.type === 'main') {
       if (!Array.isArray(body.messages)) return res.status(400).json({ error: 'Missing messages.' })
       const groqRes = await callGroq(apiKey, [
-        { role: 'system', content: 'You are a helpful AI assistant. Respond thoroughly using markdown formatting — headers, bold, lists — for clarity. Do not use <think> tags.' },
+        { role: 'system', content: 'You are a helpful AI assistant. Respond thoroughly using clean markdown — headers (##), **bold**, numbered lists, bullet points. Never use HTML tags like <br> or <p>. Never use <think> tags. Write naturally structured responses.' },
         ...body.messages,
       ], 0.7, 1500)
       if (!groqRes) return res.status(500).json({ error: 'Could not reach AI service.' })
@@ -91,15 +92,19 @@ export default async function handler(req, res) {
 
       try {
         const groqRes = await callGroq(apiKey, [
-          { role: 'system', content: 'Output ONLY raw JSON. No thinking. No <think> tags. No markdown. No backticks. No explanation. Just a JSON object starting with { and ending with }.' },
-          { role: 'user', content: `Return a JSON analysis of this AI response.
+          { role: 'system', content: 'Output ONLY raw JSON. No <think> tags. No markdown. No backticks. No explanation. Just a JSON object starting with { and ending with }.' },
+          { role: 'user', content: `Analyze this AI response in detail. Return ONLY a JSON object.
 
-Query: "${body.query.slice(0, 200)}"
-Response: "${body.response.slice(0, 800)}"
+User query: "${body.query}"
 
-Return this exact JSON structure with real analysis:
-{"reasoning_skeleton":[{"step":"what was done","label":"from_input","detail":"why"}],"uncertainty_flags":[{"sentence":"quote from response","reason":"why uncertain","severity":"medium"}],"gaps":[{"topic":"what was missed","reason":"why"}],"critical_question":{"question":"one tough question","context":"why it matters"},"sentence_labels":[{"sentence":"each key sentence","label":"confident","basis":"source"}]}` },
-        ], 0.2, 1000)
+AI response to analyze:
+"""
+${body.response.slice(0, 2000)}
+"""
+
+Return this exact JSON structure with thorough, specific analysis. Include 3-5 reasoning steps, flag 2-3 uncertain sentences with exact quotes, identify 2-3 gaps, and ask one sharp critical question:
+{"reasoning_skeleton":[{"step":"description","label":"from_input|general_knowledge|inference|assumption","detail":"explanation"}],"uncertainty_flags":[{"sentence":"exact quote from response","reason":"why uncertain","severity":"low|medium|high"}],"gaps":[{"topic":"what was missed","reason":"why omitted"}],"critical_question":{"question":"one tough question","context":"why it matters"},"sentence_labels":[{"sentence":"each key sentence from response","label":"confident|inference|assumption|uncertain","basis":"what it is based on"}]}` },
+        ], 0.2, 1500)
 
         if (groqRes) {
           const data = await groqRes.json().catch(() => null)
@@ -113,7 +118,6 @@ Return this exact JSON structure with real analysis:
         }
       } catch {}
 
-      // Always return something — use minimal reflection as fallback
       return res.status(200).json({ reflection: MINIMAL_REFLECTION })
     }
 
@@ -121,7 +125,7 @@ Return this exact JSON structure with real analysis:
     if (body.type === 'followup') {
       if (!body.query || !body.criticalQuestion) return res.status(400).json({ error: 'Missing fields.' })
       const groqRes = await callGroq(apiKey, [
-        { role: 'system', content: 'Help the user think critically about an AI response. Be specific and practical. Do not use <think> tags.' },
+        { role: 'system', content: 'Help the user think critically about an AI response. Be specific and practical. Do not use <think> tags or HTML.' },
         { role: 'user', content: `Query: "${body.query}"\nQuestion: "${body.criticalQuestion}"\nHelp me think through this.` },
       ], 0.5, 800)
       if (!groqRes) return res.status(500).json({ error: 'Could not reach AI.' })
@@ -129,8 +133,7 @@ Return this exact JSON structure with real analysis:
       if (!data || !groqRes.ok) return res.status(500).json({ error: 'AI error.' })
       const content = data?.choices?.[0]?.message?.content
       if (!content) return res.status(500).json({ error: 'Empty response.' })
-      // Strip think tags from followup too
-      const clean = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+      const clean = content.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<[^>]+>/g, '').trim()
       return res.status(200).json({ followup: clean })
     }
 

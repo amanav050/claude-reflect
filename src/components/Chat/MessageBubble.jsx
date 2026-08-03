@@ -90,7 +90,13 @@ function MessageBubble({ message, sentenceLabels, onSentenceClick, activeSentenc
   }
 
   const hasLabels = Array.isArray(sentenceLabels) && sentenceLabels.length > 0
-  const content = (message.content || '').replace(/<br\s*\/?>/gi, '\n').replace(/<think>[\s\S]*?<\/think>/gi, '')
+  const content = (message.content || '')
+  .replace(/<think>[\s\S]*?<\/think>/gi, '')
+  .replace(/<br\s*\/?>/g, '\n')
+  .replace(/<\/?p>/gi, '\n\n')
+  .replace(/<\/?[^>]+(>|$)/g, '')
+  .replace(/\n{3,}/g, '\n\n')
+  .trim()
 
   return (
     <article className="mb-6">
