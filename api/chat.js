@@ -1,6 +1,6 @@
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const MODEL = 'openai/gpt-oss-20b'
-const REFLECTION_MODEL = 'openai/gpt-oss-120b'
+const REFLECTION_MODEL = 'qwen/qwen3.6-27b'
 const FALLBACK_MODEL = 'openai/gpt-oss-120b'
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
