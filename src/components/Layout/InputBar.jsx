@@ -43,7 +43,11 @@ function InputBar({ onSend, disabled, showChips = false }) {
       recognitionRef.current = null
     }
     return () => {
-      try { recognitionRef.current?.abort() } catch {}
+      try {
+        recognitionRef.current?.abort()
+      } catch {
+        // Recognition was never started, nothing to stop
+      }
     }
   }, [])
 
@@ -122,7 +126,7 @@ function InputBar({ onSend, disabled, showChips = false }) {
         />
 
         {/* Voice button */}
-        {SpeechRecognition && recognitionRef.current && (
+        {SpeechRecognition && (
           <button
             type="button"
             onClick={toggleVoice}

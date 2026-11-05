@@ -5,21 +5,8 @@ import GapDisclosure from './GapDisclosure.jsx'
 import CriticalQuestion from './CriticalQuestion.jsx'
 import ClaudeLogo from '../ClaudeLogo.jsx'
 
-function ReflectPanel({
-  reflection,
-  isLoading,
-  activeFlagId,
-  onFlagClick,
-  originalQuery,
-  mainResponse,
-  showGlow,
-  theme,
-  onToggleTheme,
-}) {
-  const [mobileOpen, setMobileOpen] = useState(false)
-  const hasData = reflection && !isLoading
-
-  const Skeleton = () => (
+function Skeleton() {
+  return (
     <div className="space-y-4 animate-pulse">
       {[1, 2, 3].map((i) => (
         <div key={i} className="space-y-2">
@@ -30,8 +17,10 @@ function ReflectPanel({
       ))}
     </div>
   )
+}
 
-  const EmptyState = () => (
+function EmptyState() {
+  return (
     <div className="flex flex-col items-center justify-center h-full py-12 px-4">
       <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-3" style={{ backgroundColor: 'rgba(83, 74, 183, 0.1)' }}>
         <ClaudeLogo size={20} style={{ color: 'var(--color-accent-reflect)' }} />
@@ -40,8 +29,10 @@ function ReflectPanel({
       <p className="text-xs mt-1" style={{ color: 'var(--color-text-tertiary)' }}>Transparency on demand</p>
     </div>
   )
+}
 
-  const ThemeTabs = () => (
+function ThemeTabs({ theme, onToggleTheme }) {
+  return (
     <div className="flex items-center rounded-lg p-0.5 gap-0.5" style={{ backgroundColor: 'var(--color-bg-page)' }}>
       <button
         onClick={() => theme !== 'light' && onToggleTheme()}
@@ -63,6 +54,21 @@ function ReflectPanel({
       >● Dark</button>
     </div>
   )
+}
+
+function ReflectPanel({
+  reflection,
+  isLoading,
+  activeFlagId,
+  onFlagClick,
+  originalQuery,
+  mainResponse,
+  showGlow,
+  theme,
+  onToggleTheme,
+}) {
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const hasData = reflection && !isLoading
 
   const panelContent = (
     <div className="h-full overflow-y-auto px-4 py-4">
@@ -122,7 +128,7 @@ function ReflectPanel({
             <ClaudeLogo size={16} style={{ color: 'var(--color-accent-reflect)' }} />
             <span className="text-xs font-medium" style={{ color: 'var(--color-accent-reflect)' }}>Reflect</span>
           </div>
-          <ThemeTabs />
+          <ThemeTabs theme={theme} onToggleTheme={onToggleTheme} />
         </div>
         {panelContent}
       </div>

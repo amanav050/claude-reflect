@@ -1,5 +1,9 @@
+/* global process */
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
-const MODEL = 'openai/gpt-oss-20b'
+// Groq rate limits are per model, so a second model is a free backup when the first is busy
+const MODELS = ['openai/gpt-oss-20b', 'openai/gpt-oss-120b']
+
+const BUSY_MESSAGE = 'The AI is busy right now. Please wait a minute and try again.'
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 
@@ -64,26 +68,27 @@ function buildFollowup(content) {
 }
 
 async function callGroq(apiKey, messages, temperature, maxTokens) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const res = await fetch(GROQ_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
-        // max_tokens covers hidden reasoning as well as the visible reply. Default effort
-        // can use most of the budget, leaving empty or cut-off output.
-        body: JSON.stringify({ model: MODEL, messages, temperature, max_tokens: maxTokens, reasoning_effort: 'low' }),
-      })
-      if (res.status === 429 && attempt < 2) {
-        await sleep(attempt === 0 ? 1000 : 2000)
-        continue
+  let busy = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    for (const model of MODELS) {
+      try {
+        const res = await fetch(GROQ_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
+          // max_tokens covers hidden reasoning as well as the visible reply. Default effort
+          // can use most of the budget, leaving empty or cut-off output. The backup model
+          // thinks longer, so it gets a bigger budget.
+          body: JSON.stringify({ model, messages, temperature, max_tokens: model === MODELS[0] ? maxTokens : maxTokens * 3, reasoning_effort: 'low' }),
+        })
+        if (res.status === 429) { busy = res; continue }
+        return res
+      } catch {
+        // Network error on this model, try the next one
       }
-      return res
-    } catch {
-      if (attempt < 2) { await sleep(1000); continue }
-      return null
     }
+    if (attempt === 0) await sleep(1500)
   }
-  return null
+  return busy
 }
 
 export default async function handler(req, res) {
@@ -102,6 +107,7 @@ export default async function handler(req, res) {
         ...body.messages,
       ], 0.7, 1500)
       if (!groqRes) return res.status(500).json({ error: 'Could not reach AI service.' })
+      if (groqRes.status === 429) return res.status(429).json({ error: BUSY_MESSAGE })
       const data = await groqRes.json().catch(() => null)
       if (!data || !groqRes.ok) return res.status(500).json({ error: 'AI service error.' })
       const content = data?.choices?.[0]?.message?.content
@@ -114,7 +120,7 @@ export default async function handler(req, res) {
       if (!body.query || !body.response) return res.status(400).json({ error: 'Missing fields.' })
 
       try {
-        const groqRes = await callGroq(apiKey, [
+        const messages = [
           { role: 'system', content: 'Output ONLY raw JSON. No <think> tags. No markdown. No backticks. No explanation. Just a JSON object starting with { and ending with }.' },
           { role: 'user', content: `Analyze this AI response in detail. Return ONLY a JSON object.
 
@@ -127,19 +133,19 @@ ${body.response.slice(0, 2000)}
 
 Return this exact JSON structure with thorough, specific analysis. Include 3-5 reasoning steps, flag 2-3 uncertain sentences with exact quotes, identify 2-3 gaps, and ask one sharp critical question:
 {"reasoning_skeleton":[{"step":"description","label":"from_input|general_knowledge|inference|assumption","detail":"explanation"}],"uncertainty_flags":[{"sentence":"exact quote from response","reason":"why uncertain","severity":"low|medium|high"}],"gaps":[{"topic":"what was missed","reason":"why omitted"}],"critical_question":{"question":"one tough question","context":"why it matters"},"sentence_labels":[{"sentence":"each key sentence from response","label":"confident|inference|assumption|uncertain","basis":"what it is based on"}]}` },
-        ], 0.2, 1500)
+        ]
 
-        if (groqRes) {
+        // Models sometimes return malformed JSON, so try twice before using the fallback
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const groqRes = await callGroq(apiKey, messages, 0.2, 1500)
+          if (!groqRes || !groqRes.ok) continue
           const data = await groqRes.json().catch(() => null)
-          if (data && groqRes.ok) {
-            const content = data?.choices?.[0]?.message?.content
-            if (content) {
-              const json = extractJSON(content)
-              if (json) return res.status(200).json({ reflection: json })
-            }
-          }
+          const json = extractJSON(data?.choices?.[0]?.message?.content)
+          if (json) return res.status(200).json({ reflection: json })
         }
-      } catch {}
+      } catch {
+        // Fall through to the minimal reflection below
+      }
 
       return res.status(200).json({ reflection: MINIMAL_REFLECTION })
     }
@@ -194,7 +200,7 @@ Rules:
       }
 
       if (best) return res.status(200).json({ followup: best.text })
-      if (lastStatus === 429) return res.status(429).json({ error: 'The AI is busy right now. Please wait a minute and try again.' })
+      if (lastStatus === 429) return res.status(429).json({ error: BUSY_MESSAGE })
       return res.status(500).json({ error: 'Could not get an answer. Please try again.' })
     }
 

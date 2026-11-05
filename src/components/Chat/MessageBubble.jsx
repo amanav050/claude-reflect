@@ -1,6 +1,5 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import ConfidenceIndicator from './ConfidenceIndicator.jsx'
 
 const mdComponents = {
   h1: ({ children }) => <h1 className="text-xl font-medium mt-5 mb-2" style={{ color: 'var(--color-text-primary)' }}>{children}</h1>,
@@ -27,18 +26,7 @@ const mdComponents = {
   tr: ({ children }) => <tr className="even:bg-[rgba(0,0,0,0.02)]">{children}</tr>,
 }
 
-function findLabelForText(text, sentenceLabels) {
-  if (!text || !sentenceLabels || sentenceLabels.length === 0) return null
-  const norm = text.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
-  if (norm.length < 10) return null
-  for (const label of sentenceLabels) {
-    const ln = label.text.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim()
-    if (norm.includes(ln) || ln.includes(norm) || (norm.length > 20 && ln.length > 20 && norm.slice(0, 25) === ln.slice(0, 25))) return label
-  }
-  return null
-}
-
-function ConfidenceSummary({ sentenceLabels, onSentenceClick }) {
+function ConfidenceSummary({ sentenceLabels }) {
   if (!sentenceLabels || sentenceLabels.length === 0) return null
 
   const counts = { confident: 0, inference: 0, assumption: 0, uncertain: 0 }
@@ -77,7 +65,7 @@ function ConfidenceSummary({ sentenceLabels, onSentenceClick }) {
   )
 }
 
-function MessageBubble({ message, sentenceLabels, onSentenceClick, activeSentenceId }) {
+function MessageBubble({ message, sentenceLabels }) {
   const isUser = message.role === 'user'
 
   if (isUser) {
@@ -109,7 +97,7 @@ function MessageBubble({ message, sentenceLabels, onSentenceClick, activeSentenc
         </ReactMarkdown>
       </div>
       {hasLabels && (
-        <ConfidenceSummary sentenceLabels={sentenceLabels} onSentenceClick={onSentenceClick} />
+        <ConfidenceSummary sentenceLabels={sentenceLabels} />
       )}
     </article>
   )
