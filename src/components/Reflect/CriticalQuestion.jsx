@@ -7,6 +7,18 @@ function briefSummaryFromResponse(text) {
   return `${text.slice(0, 150)}...`
 }
 
+// Strips markdown symbols the AI sometimes adds, so the reply shows as clean pointers
+function cleanFollowup(text) {
+  if (typeof text !== 'string') return ''
+  return text
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/^\s*[-*]\s+/gm, '• ')
+    .replace(/^\s*\|?-{3,}.*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 function CriticalQuestion({ question, context, originalQuery, mainResponse }) {
   const { getFollowup } = useGroqAPI()
   const [acknowledged, setAcknowledged] = useState(false)
@@ -51,7 +63,7 @@ function CriticalQuestion({ question, context, originalQuery, mainResponse }) {
       return
     }
 
-    setFollowupText(result.data.followup ?? '')
+    setFollowupText(cleanFollowup(result.data.followup ?? ''))
   }
 
   const dimmed = acknowledged || actionsDisabled
@@ -66,45 +78,45 @@ function CriticalQuestion({ question, context, originalQuery, mainResponse }) {
           dimmed ? 'opacity-60' : ''
         }`}
       >
-      {question && (
-        <p className="text-sm font-medium text-text-primary">{question}</p>
-      )}
-      {context && (
-        <p className="text-xs text-text-secondary mt-2">{context}</p>
-      )}
+        {question && (
+          <p className="text-sm font-medium text-text-primary">{question}</p>
+        )}
+        {context && (
+          <p className="text-xs text-text-secondary mt-2">{context}</p>
+        )}
 
-      <div className="flex flex-col sm:flex-row gap-2 mt-3">
-        <button
-          type="button"
-          onClick={handleConsidered}
-          disabled={actionsDisabled}
-          className="flex-1 min-h-[44px] px-3 py-2 text-sm border border-current text-text-secondary rounded-lg transition-colors duration-200 hover:bg-card/50 disabled:cursor-default disabled:opacity-70"
-        >
-          {acknowledged ? '✓ Considered' : "I've considered this"}
-        </button>
-        <button
-          type="button"
-          onClick={handleHelpClick}
-          disabled={actionsDisabled || followupLoading}
-          className="flex-1 min-h-[44px] px-3 py-2 text-sm bg-accent-reflect text-white rounded-lg transition-transform duration-200 hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
-        >
-          {followupLoading ? 'Thinking...' : 'Help me think through this'}
-        </button>
-      </div>
-
-      {followupExpanded && (
-        <div className="mt-3 bg-card rounded-lg p-3 text-text-primary text-sm leading-relaxed">
-          {followupLoading && (
-            <p className="text-text-secondary">Thinking...</p>
-          )}
-          {followupError && (
-            <p className="text-confidence-red">{followupError}</p>
-          )}
-          {!followupLoading && followupText && (
-            <p className="whitespace-pre-wrap">{followupText}</p>
-          )}
+        <div className="flex flex-col sm:flex-row gap-2 mt-3">
+          <button
+            type="button"
+            onClick={handleConsidered}
+            disabled={actionsDisabled}
+            className="flex-1 min-h-[44px] px-3 py-2 text-sm border border-current text-text-secondary rounded-lg transition-colors duration-200 hover:bg-card/50 disabled:cursor-default disabled:opacity-70"
+          >
+            {acknowledged ? '✓ Considered' : "I've considered this"}
+          </button>
+          <button
+            type="button"
+            onClick={handleHelpClick}
+            disabled={actionsDisabled || followupLoading}
+            className="flex-1 min-h-[44px] px-3 py-2 text-sm bg-accent-reflect text-white rounded-lg transition-transform duration-200 hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+          >
+            {followupLoading ? 'Thinking...' : 'Help me think through this'}
+          </button>
         </div>
-      )}
+
+        {followupExpanded && (
+          <div className="mt-3 bg-card rounded-lg p-3 text-text-primary text-sm leading-relaxed">
+            {followupLoading && (
+              <p className="text-text-secondary">Thinking...</p>
+            )}
+            {followupError && (
+              <p className="text-confidence-red">{followupError}</p>
+            )}
+            {!followupLoading && followupText && (
+              <p className="whitespace-pre-wrap">{followupText}</p>
+            )}
+          </div>
+        )}
       </div>
     </section>
   )

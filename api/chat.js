@@ -124,10 +124,46 @@ Return this exact JSON structure with thorough, specific analysis. Include 3-5 r
     // ── FOLLOWUP ──
     if (body.type === 'followup') {
       if (!body.query || !body.criticalQuestion) return res.status(400).json({ error: 'Missing fields.' })
+
+      const answer = (body.response || body.briefSummary || '').slice(0, 1200)
+
       const groqRes = await callGroq(apiKey, [
-        { role: 'system', content: 'Help the user think critically about an AI response. Be specific and practical. Do not use <think> tags or HTML.' },
-        { role: 'user', content: `Query: "${body.query}"\nQuestion: "${body.criticalQuestion}"\nHelp me think through this.` },
-      ], 0.5, 800)
+        {
+          role: 'system',
+          content: 'You help users think critically about an AI answer before they act on it. Reply in plain text only. No markdown, no # headings, no ** bold, no tables, no HTML, no <think> tags. Use only the • symbol for bullets.',
+        },
+        {
+          role: 'user',
+          content: `The user asked: "${body.query}"
+
+The AI answered:
+"""
+${answer}
+"""
+
+Critical question to think through: "${body.criticalQuestion}"
+
+Reply in exactly this format and nothing else:
+
+Why this matters:
+• [one short sentence]
+
+Things to check:
+• [one short sentence]
+• [one short sentence]
+• [one short sentence]
+
+Your next step:
+• [one short sentence]
+
+Rules:
+- Maximum 90 words in total.
+- Plain, everyday English. No jargon.
+- Be specific to this question and answer, not generic advice.
+- No intro line and no closing line.`,
+        },
+      ], 0.3, 500)
+
       if (!groqRes) return res.status(500).json({ error: 'Could not reach AI.' })
       const data = await groqRes.json().catch(() => null)
       if (!data || !groqRes.ok) return res.status(500).json({ error: 'AI error.' })
