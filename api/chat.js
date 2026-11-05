@@ -48,9 +48,11 @@ async function callGroq(apiKey, messages, temperature, maxTokens) {
       const res = await fetch(GROQ_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + apiKey },
-        body: JSON.stringify({ model: MODEL, messages, temperature, max_tokens: maxTokens }),
+        // max_tokens covers hidden reasoning as well as the visible reply. Default effort
+        // can use most of the budget, leaving empty or cut-off output.
+        body: JSON.stringify({ model: MODEL, messages, temperature, max_tokens: maxTokens, reasoning_effort: 'low' }),
       })
-      if (res.status === 429) {
+      if (res.status === 429 && attempt < 2) {
         await sleep(attempt === 0 ? 1000 : 2000)
         continue
       }
@@ -162,9 +164,10 @@ Rules:
 - Be specific to this question and answer, not generic advice.
 - No intro line and no closing line.`,
         },
-      ], 0.3, 500)
+      ], 0.3, 800)
 
       if (!groqRes) return res.status(500).json({ error: 'Could not reach AI.' })
+      if (groqRes.status === 429) return res.status(429).json({ error: 'The AI is busy right now. Please wait a minute and try again.' })
       const data = await groqRes.json().catch(() => null)
       if (!data || !groqRes.ok) return res.status(500).json({ error: 'AI error.' })
       const content = data?.choices?.[0]?.message?.content
