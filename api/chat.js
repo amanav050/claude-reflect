@@ -42,6 +42,27 @@ const MINIMAL_REFLECTION = JSON.stringify({
   sentence_labels: [],
 })
 
+// The panel fits about 57 characters per line, so this range is roughly 4-7 lines per point
+const FOLLOWUP_MIN_CHARS = 220
+const FOLLOWUP_MAX_CHARS = 420
+const FOLLOWUP_POINTS = 5
+
+// The model only supplies the words. The layout is built here so it can't drift.
+function buildFollowup(content) {
+  const parts = content.replace(/<think>[\s\S]*?<\/think>/gi, '').split(/\b(WHY|CHECK1|CHECK2|CHECK3|NEXT):/)
+  const found = {}
+  for (let i = 1; i < parts.length - 1; i += 2) found[parts[i]] = parts[i + 1]
+  const points = ['WHY', 'CHECK1', 'CHECK2', 'CHECK3', 'NEXT'].map(label =>
+    (found[label] || '').replace(/[*#•]/g, '').replace(/\s+/g, ' ').trim(),
+  )
+  if (points.some(point => !point)) return null
+  const [a, b, c, d, e] = points
+  return {
+    text: `Why this matters:\n• ${a}\n\nThings to check:\n• ${b}\n• ${c}\n• ${d}\n\nYour next step:\n• ${e}`,
+    wellSized: [a, b, c, d, e].filter(p => p.length >= FOLLOWUP_MIN_CHARS && p.length <= FOLLOWUP_MAX_CHARS).length,
+  }
+}
+
 async function callGroq(apiKey, messages, temperature, maxTokens) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -129,10 +150,10 @@ Return this exact JSON structure with thorough, specific analysis. Include 3-5 r
 
       const answer = (body.response || body.briefSummary || '').slice(0, 1200)
 
-      const groqRes = await callGroq(apiKey, [
+      const messages = [
         {
           role: 'system',
-          content: 'You help users think critically about an AI answer before they act on it. Reply in plain text only. No markdown, no # headings, no ** bold, no tables, no HTML, no <think> tags. Use only the • symbol for bullets.',
+          content: 'You help users think critically about an AI answer before they act on it. Reply in plain text only. No markdown, no bullets, no bold, no HTML, no <think> tags.',
         },
         {
           role: 'user',
@@ -145,35 +166,36 @@ ${answer}
 
 Critical question to think through: "${body.criticalQuestion}"
 
-Reply in exactly this format and nothing else:
+Reply with exactly these five lines and nothing else:
 
-Why this matters:
-• [one short sentence]
-
-Things to check:
-• [one short sentence]
-• [one short sentence]
-• [one short sentence]
-
-Your next step:
-• [one short sentence]
+WHY: why this question matters
+CHECK1: the first thing to check
+CHECK2: a different second thing to check
+CHECK3: a different third thing to check
+NEXT: the next step to take
 
 Rules:
-- Maximum 90 words in total.
-- Plain, everyday English. No jargon.
-- Be specific to this question and answer, not generic advice.
-- No intro line and no closing line.`,
+- Every line must be exactly 3 sentences and 45 to 60 words. Never shorter, never longer.
+- Simple, everyday English, as if explaining to a friend. Short common words. No jargon.
+- Be specific to this question and answer, not generic advice. If the answer is simple, explain what could still change it.`,
         },
-      ], 0.3, 800)
+      ]
 
-      if (!groqRes) return res.status(500).json({ error: 'Could not reach AI.' })
-      if (groqRes.status === 429) return res.status(429).json({ error: 'The AI is busy right now. Please wait a minute and try again.' })
-      const data = await groqRes.json().catch(() => null)
-      if (!data || !groqRes.ok) return res.status(500).json({ error: 'AI error.' })
-      const content = data?.choices?.[0]?.message?.content
-      if (!content) return res.status(500).json({ error: 'Empty response.' })
-      const clean = content.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<[^>]+>/g, '').trim()
-      return res.status(200).json({ followup: clean })
+      // Keep the best reply and retry if any point is the wrong length
+      let best = null
+      let lastStatus = null
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const groqRes = await callGroq(apiKey, messages, 0.3, 1000)
+        lastStatus = groqRes ? groqRes.status : null
+        const data = groqRes && groqRes.ok ? await groqRes.json().catch(() => null) : null
+        const reply = buildFollowup(data?.choices?.[0]?.message?.content || '')
+        if (reply && (!best || reply.wellSized > best.wellSized)) best = reply
+        if (best?.wellSized === FOLLOWUP_POINTS) break
+      }
+
+      if (best) return res.status(200).json({ followup: best.text })
+      if (lastStatus === 429) return res.status(429).json({ error: 'The AI is busy right now. Please wait a minute and try again.' })
+      return res.status(500).json({ error: 'Could not get an answer. Please try again.' })
     }
 
     return res.status(400).json({ error: 'Invalid type.' })
